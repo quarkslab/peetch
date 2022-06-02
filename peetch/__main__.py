@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-2.0+
 # Guillaume Valadon <gvaladon@quarkslab.com>
 
-import sys
+from . import main
 
-from peetch.main import main
-
-main(sys.argv[1:])
+main()

@@ -9,6 +9,6 @@ setup(name="peetch",
       author_email="gvaladon@quarkslab.com",
       version="0.1.0",
       packages=["peetch"],
-      scripts=["bin/peetch"],
       package_data={"peetch": ["ebpf_programs/peetch_*.c"]},
+      entry_points={"console_scripts": ["peetch=peetch:main"]},
       )
