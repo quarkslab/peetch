@@ -109,4 +109,4 @@ $ scapy
 
 ## Limitations
 
-By design, peetch only supports OpenSSL and TLS 1.2. The default offsets for OpenSSL structures assume that you are using the `1.1.1f-1ubuntu2.13` on `arm64`. However, they can easily be changed using command line arguments.
+By design, peetch only supports OpenSSL and TLS 1.2.

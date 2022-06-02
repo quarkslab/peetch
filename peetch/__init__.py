@@ -6,6 +6,7 @@ import atexit
 import ctypes as ct
 import binascii
 import os
+import peetch.utils
 import socket
 import struct
 import sys
@@ -136,15 +137,33 @@ def tls_command(args):
     if args.directions:
         directions_bool = "0"
 
+    # Get SSL structures offsets
+    offsets = [str(offset) for offset in peetch.utils.get_offsets()]
+    ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
+
+    if ssl_session_offset == ssl_cipher_offset and \
+       ssl_cipher_offset == master_secret_offset and master_secret_offset == 0:
+        print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
+        sys.exit(1)
+
+    if ssl_session_offset:
+        ssl_session_offset = args.ssl_session_offset
+
+    if ssl_cipher_offset:
+        ssl_cipher_offset = args.ssl_cipher_offset
+
+    if master_secret_offset:
+        master_secret_offset = args.master_secret_offset
+
     # Compile eBPF programs
     ebpf_programs = BPF_TLS_PROGRAM_SOURCE.replace("DIRECTIONS",
                                                    directions_bool)
     ebpf_programs = ebpf_programs.replace("SSL_SESSION_OFFSET",
-                                          args.ssl_session_offset)
+                                          ssl_session_offset)
     ebpf_programs = ebpf_programs.replace("MASTER_SECRET_OFFSET",
-                                          args.master_secret_offset)
+                                          master_secret_offset)
     ebpf_programs = ebpf_programs.replace("SSL_CIPHER_OFFSET",
-                                          args.ssl_cipher_offset)
+                                          ssl_cipher_offset)
     bpf_handler = BPF(text=ebpf_programs)
 
     # Attach the probes
