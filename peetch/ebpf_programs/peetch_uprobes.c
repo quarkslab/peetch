@@ -62,7 +62,8 @@ TRACEPOINT_PROBE(syscalls, sys_enter_connect) {
     u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 
     // Store a TLS event in the pid_cache
-    struct tls_event_t event = { .port = addr_in.sin_port, .addr = addr_in.sin_addr.s_addr};
+    struct tls_event_t event = { .port = addr_in.sin_port,
+                                 .addr = addr_in.sin_addr.s_addr};
     pid_cache.update(&pid, (u64*)&event);
 
     return 0;
@@ -89,7 +90,7 @@ static u16 get_tls_version(void *ssl_st_ptr) {
 }
 
 
- static void parse_session(struct pt_regs *ctx) {
+static void parse_session(struct pt_regs *ctx) {
     // Parse a struct sl_session_st pointer and send
     // data to userspace
 
@@ -109,7 +110,8 @@ static u16 get_tls_version(void *ssl_st_ptr) {
 
     // Access the TLS 1.2 master secret
     void *ms_ptr = (void *) (address + MASTER_SECRET_OFFSET);
-    ret = bpf_probe_read(&tls_information.master_secret, sizeof(tls_information.master_secret), ms_ptr);
+    ret = bpf_probe_read(&tls_information.master_secret,
+                         sizeof(tls_information.master_secret), ms_ptr);
     if (ret)
         bpf_trace_printk("parse_session() #2 - bpf_probe_read() failed\n");
 
@@ -127,7 +129,8 @@ static u16 get_tls_version(void *ssl_st_ptr) {
 
     // Access the TLS ciphersuite
     void *cs_ptr = (void *) address;
-    ret = bpf_probe_read(&tls_information.ciphersuite, sizeof(tls_information.ciphersuite), cs_ptr);
+    ret = bpf_probe_read(&tls_information.ciphersuite,
+                         sizeof(tls_information.ciphersuite), cs_ptr);
     if (ret)
         bpf_trace_printk("parse_session() #5 - bpf_probe_read() failed\n");
 
@@ -157,7 +160,8 @@ static int SSL_read_write(struct pt_regs *ctx, u16 tls_version, struct SSL_buffe
     new_event.is_read = buffer->is_read;
     new_event.tls_version = tls_version;
 
-    int ret = bpf_probe_read(&new_event.message, sizeof(new_event.message), (void*) buffer->ptr);
+    int ret = bpf_probe_read(&new_event.message,
+                             sizeof(new_event.message), (void*) buffer->ptr);
     if (ret) {
         bpf_trace_printk("SSL_read_write() - bpf_probe_read() failed\n");
         return 0;
@@ -168,7 +172,7 @@ static int SSL_read_write(struct pt_regs *ctx, u16 tls_version, struct SSL_buffe
     tls_events.perf_submit(ctx, &new_event, sizeof(new_event));
 
     // Flush the PID cache
-    if (DIRECTIONS) // this will be replaced by a boolean in Python
+    if (DIRECTIONS)  // this will be replaced by a boolean in Python
         pid_cache.delete(&pid);
 
     return 0;
@@ -202,7 +206,7 @@ int SSL_read_ret(struct pt_regs *ctx) {
     // Retrieve SSL read buffers information for PID
     u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     struct SSL_buffer_t *buffer = (struct SSL_buffer_t*) SSL_read_buffers.lookup(&pid);
-    if (buffer == NULL) 
+    if (buffer == NULL)
         return 0;
 
     // Create a new buffer structure

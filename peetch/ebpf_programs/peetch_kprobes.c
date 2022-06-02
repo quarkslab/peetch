@@ -27,8 +27,7 @@ BPF_HASH(pid_cache, struct key_t *);
 
 BPF_PERF_OUTPUT(skb_events);
 
-int process_frame(struct __sk_buff *skb)
-{
+int process_frame(struct __sk_buff *skb) {
   // Data accessors
   unsigned char *data = (void *)(long)skb->data;
   unsigned char *data_end = (void *)(long)skb->data_end;
@@ -70,7 +69,7 @@ int process_frame(struct __sk_buff *skb)
 }
 
 int kprobe_security_sk_classify_flow(struct pt_regs *ctx, struct sock *sk, struct flowi *fl) {
-
+  // Discard everything but IPv4
   if (sk->sk_family != AF_INET)
     return 0;
 
@@ -84,8 +83,12 @@ int kprobe_security_sk_classify_flow(struct pt_regs *ctx, struct sock *sk, struc
   struct key_t key;
   struct data_t data;
 
-  bpf_probe_read(&key.src, sizeof(sk->__sk_common.skc_daddr), &sk->__sk_common.skc_daddr);
-  bpf_probe_read(&key.dst, sizeof(sk->__sk_common.skc_rcv_saddr), &sk->__sk_common.skc_rcv_saddr);
+  bpf_probe_read(&key.src,
+                 sizeof(sk->__sk_common.skc_daddr),
+                 &sk->__sk_common.skc_daddr);
+  bpf_probe_read(&key.dst,
+                 sizeof(sk->__sk_common.skc_rcv_saddr),
+                 &sk->__sk_common.skc_rcv_saddr);
 
   // Get and store the PID
   u64 id = bpf_get_current_pid_tgid();
