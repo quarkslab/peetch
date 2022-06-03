@@ -87,7 +87,7 @@ def handle_skb_event(cpu, data, size):
     for i in range(len(data)):
         if data[i] == 0:
             break
-    process_name = data[:i].decode("ascii")
+    process_name = data[:i].decode("utf-8", "replace")
     data = data[i:]
 
     process_information = "%s/%d" % (process_name, skb_event.pid)
@@ -199,9 +199,9 @@ def tls_command(args):
         bpf_map_tls_information = bpf_handler["tls_information_cache"]
         for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
             if pid == tls_event.pid:
-                ciphersuite = tls_info.ciphersuite.decode("ascii")
+                ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
                 master_secret = binascii.hexlify(tls_info.master_secret)
-                master_secret = master_secret.decode("ascii")
+                master_secret = master_secret.decode("ascii", "ignore")
                 pid_to_delete = [pid]
                 break
 
@@ -222,7 +222,7 @@ def tls_command(args):
                 print("->", end=" ")
             else:
                 print("<-", end=" ")
-        print("%s (%d)" % (tls_event.comm.decode("ascii"),
+        print("%s (%d)" % (tls_event.comm.decode("ascii", "replace"),
                            tls_event.pid), end=" ")
         print("%s/%d" % (socket.inet_ntop(socket.AF_INET, addr),
                          socket.ntohs(tls_event.port)), end=" ")
