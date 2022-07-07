@@ -147,8 +147,17 @@ static int SSL_read_write(struct pt_regs *ctx, u16 tls_version, struct SSL_buffe
     // Retrieve connect() information for PID
     u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     struct tls_event_t *event = (struct tls_event_t*) pid_cache.lookup(&pid);
-    if (event == NULL)
-        return 0;
+    if (event == NULL) {
+    
+    	//get ppid to check if it is a child of a known process 
+    	struct task_struct *task;
+		task = (struct task_struct *)bpf_get_current_task();
+		pid = task->real_parent->tgid;
+		
+		event = (struct tls_event_t*) pid_cache.lookup(&pid);
+    	if(event == NULL)
+    		return 0;
+    }
 
     // Build a new TLS event and fill it
     struct tls_event_t new_event;
