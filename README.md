@@ -89,7 +89,7 @@ peetch tls --content
 The `--secrets` arguments will display TLS Master Secrets extracted from memory. The following example leverages `--write` to write master secrets to simplify decrypting TLS messages with Scapy:
 
 ```shell
-$ (sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 -http1.1) &
+$ (sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 --http1.1) &
 
 # peetch tls --write &
 curl (1293232) 208.97.177.124/443 TLS1.2 ECDHE-RSA-AES128-GCM-SHA256
