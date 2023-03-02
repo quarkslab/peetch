@@ -11,7 +11,7 @@ RUN set -x && \
     PACKAGES="bison build-essential cmake flex git \
     libedit-dev libllvm11 llvm-11-dev libclang-11-dev python zlib1g-dev \
     libelf-dev libfl-dev python3-distutils python3-pip linux-headers-$(uname -r) \
-    libssl-dev iproute2 tmux curl bc libelf-dev" && \
+    libssl-dev iproute2 tmux curl bc libelf-dev zip" && \
     apt-get update && apt-get install -y $PACKAGES && \
     apt-get autoclean && apt-get --purge -y autoremove && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
