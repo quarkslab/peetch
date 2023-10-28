@@ -57,9 +57,9 @@ def unload_classifier(interface):
     os.system("tc qdisc del dev %s clsact" % args.interface)
 
 
-def exit_handler(interface, filename, bpf_handler):
+def exit_handler_command(interface, filename, bpf_handler):
     """
-    Exit nicely
+    Exit command nicely
     """
     time.sleep(0.01)
     bpf_handler.detach_kprobe(event="security_sk_classify_flow",
@@ -113,7 +113,7 @@ def dump_command(args):
                               fn_name="kprobe_security_sk_classify_flow")
 
     # Setup the exit handler
-    atexit.register(exit_handler, args.interface, args.write, bpf_handler)
+    atexit.register(exit_handler_command, args.interface, args.write, bpf_handler)
 
     # Load eBPF TC Classifier
     classifier_function = bpf_handler.load_func("process_frame", BPF.SCHED_CLS)
@@ -142,18 +142,18 @@ def tls_command(args):
     ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
 
     if ssl_session_offset == ssl_cipher_offset and \
-       ssl_cipher_offset == master_secret_offset and master_secret_offset == 0:
+       ssl_cipher_offset == master_secret_offset and master_secret_offset == '0':
         print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
         sys.exit(1)
 
-    if ssl_session_offset:
-        ssl_session_offset = args.ssl_session_offset
+    if not args.ssl_session_offset is None:
+        ssl_session_offset = str(args.ssl_session_offset)
 
-    if ssl_cipher_offset:
-        ssl_cipher_offset = args.ssl_cipher_offset
+    if not args.ssl_session_offset is None:
+        ssl_cipher_offset = str(args.ssl_cipher_offset)
 
-    if master_secret_offset:
-        master_secret_offset = args.master_secret_offset
+    if not args.ssl_session_offset is None:
+        master_secret_offset = str(args.master_secret_offset)
 
     # Compile eBPF programs
     ebpf_programs = BPF_TLS_PROGRAM_SOURCE.replace("DIRECTIONS",
@@ -198,7 +198,7 @@ def tls_command(args):
         ciphersuite = None
         bpf_map_tls_information = bpf_handler["tls_information_cache"]
         for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
-            if pid == tls_event.pid:
+            if pid.value == tls_event.pid:
                 ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
                 master_secret = binascii.hexlify(tls_info.master_secret)
                 master_secret = master_secret.decode("ascii", "ignore")
@@ -236,7 +236,7 @@ def tls_command(args):
             if args.secrets:
                 print("\n   %s\n" % key_log)
             if args.write:
-                fd = open("%d-master_secret.log" % pid, "w")
+                fd = open("%d-master_secret.log" % pid.value, "w")
                 fd.write(key_log)
                 fd.close()
 
@@ -288,13 +288,10 @@ def main():
     dump_parser.add_argument("--write", action="store_true",
                              help="write TLS secrets to files")
     dump_parser.add_argument("--ssl_session_offset",
-                             default="0x510",
                              help="offset to the ssl_session_t structure")
     dump_parser.add_argument("--master_secret_offset",
-                             default="80",
                              help="offset to the master secret in an ssl_session_t structure")  # noqa: E501
     dump_parser.add_argument("--ssl_cipher_offset",
-                             default="0x1f8",
                              help="offset to the ssl_cipher structure in an ssl_session_t structure")  # noqa: E501
     dump_parser.set_defaults(func=tls_command)
 

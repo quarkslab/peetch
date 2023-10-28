@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0+
 # Guillaume Valadon <gvaladon@quarkslab.com>
 
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 ENV TZ=Europe/Paris DEBIAN_FRONTEND=noninteractive
 RUN echo 'PS1="quarkslab/peetch:\w# "' >> /root/.bashrc
@@ -9,7 +9,7 @@ RUN echo 'PS1="quarkslab/peetch:\w# "' >> /root/.bashrc
 # Install dependencies
 RUN set -x && \
     PACKAGES="bison build-essential cmake flex git \
-    libedit-dev libllvm11 llvm-11-dev libclang-11-dev python zlib1g-dev \
+    libedit-dev libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev \
     libelf-dev libfl-dev python3-distutils python3-pip linux-headers-$(uname -r) \
     libssl-dev iproute2 tmux curl bc libelf-dev zip" && \
     apt-get update && apt-get install -y $PACKAGES && \

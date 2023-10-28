@@ -7,6 +7,8 @@
 
 #include <openssl/ssl.h>
 
+#define STRUCTURE_SIZE 8192
+
 struct libssl_offsets_t {
   uint64_t ssl_session;
   uint64_t ssl_cipher;
@@ -66,7 +68,7 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
 
   // SSL_SESSION* offset
   SSL_SESSION *session = SSL_get_session(ssl);
-  for (uint64_t i = 0x000; i < 0x600; i++) {
+  for (uint64_t i = 0x000; i < STRUCTURE_SIZE; i++) {
     uint64_t value = (uint64_t) ssl + i;
     uint64_t *ptr = (uint64_t*) value;
     if ((uint64_t) *ptr == (uint64_t) session) {
@@ -77,7 +79,7 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
 
   // SSL_CIPHER* offset
   const SSL_CIPHER *cipher = SSL_get_current_cipher(ssl);
-  for (uint64_t i = 0x000; i < 0x600; i++) {
+  for (uint64_t i = 0x000; i < STRUCTURE_SIZE; i++) {
     uint64_t value = (uint64_t) session + i;
     uint64_t *ptr = (uint64_t*) value;
     if ((uint64_t) *ptr == (uint64_t) cipher) {
@@ -94,7 +96,7 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
     printf("SSL_SESSION_get_master_key() error - %d\n", fd);
     return offsets;
   }
-  for (uint64_t i=0x000; i < 0x600; i++) {
+  for (uint64_t i=0x000; i < STRUCTURE_SIZE; i++) {
     uint64_t value = (uint64_t) session + i;
     uint64_t *ptr = (uint64_t*) value;
     value = (uint64_t) session + i + 47;
@@ -112,7 +114,7 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
 int main() {
  /*
  Compile it with:
- cc -o libssl_offsets -lssl libssl.c
+ cc -o libssl_offsets libssl.c -lssl
  */
   struct libssl_offsets_t offsets = libssl_offsets("1.1.1.1", 443);
   printf("--ssl_session_offset=0x%lx\n", offsets.ssl_session);

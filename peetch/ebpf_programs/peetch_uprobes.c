@@ -48,9 +48,9 @@ BPF_HASH(tls_information_cache, u32, struct TLS_information_t);
 TRACEPOINT_PROBE(syscalls, sys_enter_connect) {
     // Retrieve the sockaddr_in structure
     struct sockaddr_in addr_in;
-    int ret = bpf_probe_read((void*)&addr_in, sizeof(addr_in), args->uservaddr);
-    if (ret) {
-        bpf_trace_printk("sys_enter_connect() - bpf_probe_read() failed\n");
+    long ret = bpf_probe_read_user((void*)&addr_in, sizeof(addr_in), args->uservaddr);
+    if (ret != 0) {
+        bpf_trace_printk("sys_enter_connect() - bpf_probe_read_user() failed\n");
         return 0;
     }
 
@@ -80,9 +80,9 @@ static u16 get_tls_version(void *ssl_st_ptr) {
     // Extract the TLS version from a struct ssl_str pointer
     struct ssl_st ssl;
 
-    int ret = bpf_probe_read(&ssl, sizeof(ssl), ssl_st_ptr);
-    if (ret) {
-        bpf_trace_printk("get_tls_version() - bpf_probe_read() failed\n");
+    long ret = bpf_probe_read_user(&ssl, sizeof(ssl), ssl_st_ptr);
+    if (ret != 0) {
+        bpf_trace_printk("get_tls_version() - bpf_probe_read_user() failed\n");
         return -1;
     }
 
@@ -104,35 +104,35 @@ static void parse_session(struct pt_regs *ctx) {
     u64 *ssl_session_st_ptr = (u64 *) (ssl_st_ptr + SSL_SESSION_OFFSET);
 
     u64 address;
-    int ret = bpf_probe_read(&address, sizeof(address), ssl_session_st_ptr);
-    if (ret)
-        bpf_trace_printk("parse_session() #1 - bpf_probe_read() failed\n");
+    long ret = bpf_probe_read_user(&address, sizeof(address), ssl_session_st_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #1 - bpf_probe_read_user() failed\n");
 
     // Access the TLS 1.2 master secret
     void *ms_ptr = (void *) (address + MASTER_SECRET_OFFSET);
-    ret = bpf_probe_read(&tls_information.master_secret,
-                         sizeof(tls_information.master_secret), ms_ptr);
-    if (ret)
-        bpf_trace_printk("parse_session() #2 - bpf_probe_read() failed\n");
+    ret = bpf_probe_read_user(&tls_information.master_secret,
+                              sizeof(tls_information.master_secret), ms_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #2 - bpf_probe_read_user() failed\n");
 
     // Get a ssl_cipher_st pointer
     void *ssl_cipher_st_ptr = (void *) (address + SSL_CIPHER_OFFSET);
-    ret = bpf_probe_read(&address, sizeof(address), ssl_cipher_st_ptr);
-    if (ret)
-        bpf_trace_printk("parse_session() #3 - bpf_probe_read() failed\n");
+    ret = bpf_probe_read_user(&address, sizeof(address), ssl_cipher_st_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #3 - bpf_probe_read_user() failed\n");
 
     // Get the SSL_cipher_st point to the name member
     ssl_cipher_st_ptr = (void *) (address + 8);
-    ret = bpf_probe_read(&address, sizeof(address), ssl_cipher_st_ptr);
-    if (ret)
-        bpf_trace_printk("parse_session() #4 - bpf_probe_read() failed\n");
+    ret = bpf_probe_read_user(&address, sizeof(address), ssl_cipher_st_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #4 - bpf_probe_read_user() failed\n");
 
     // Access the TLS ciphersuite
     void *cs_ptr = (void *) address;
-    ret = bpf_probe_read(&tls_information.ciphersuite,
-                         sizeof(tls_information.ciphersuite), cs_ptr);
-    if (ret)
-        bpf_trace_printk("parse_session() #5 - bpf_probe_read() failed\n");
+    ret = bpf_probe_read_user(&tls_information.ciphersuite,
+                              sizeof(tls_information.ciphersuite), cs_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #5 - bpf_probe_read_user() failed\n");
 
     u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     tls_information_cache.update(&pid, &tls_information);
@@ -169,10 +169,10 @@ static int SSL_read_write(struct pt_regs *ctx, u16 tls_version, struct SSL_buffe
     new_event.is_read = buffer->is_read;
     new_event.tls_version = tls_version;
 
-    int ret = bpf_probe_read(&new_event.message,
+    long ret = bpf_probe_read_user(&new_event.message,
                              sizeof(new_event.message), (void*) buffer->ptr);
-    if (ret) {
-        bpf_trace_printk("SSL_read_write() - bpf_probe_read() failed\n");
+    if (ret != 0) {
+        bpf_trace_printk("SSL_read_write() - bpf_probe_read_user() failed\n");
         return 0;
     }
     new_event.message_length = buffer->length;
@@ -226,7 +226,7 @@ int SSL_read_ret(struct pt_regs *ctx) {
 
     // Retrieve the TLS version
     struct SSL_buffer_t tmp;
-    int ret = bpf_probe_read(&tmp, sizeof(tmp), buffer);
+    long ret = bpf_probe_read_user(&tmp, sizeof(tmp), buffer);
     if (ret != 0) {
         return 0;
     }
