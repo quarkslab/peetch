@@ -64,7 +64,7 @@ By default, `peetch tls` will only display one line per process, the `--directio
 ```shell
 peetch tls --directions
 <- curl (1291078) 208.97.177.124/443 TLS1.2 ECDHE-RSA-AES128-GCM-SHA256
--> curl (1291078) 208.97.177.124/443 TLS1.-1 ECDHE-RSA-AES128-GCM-SHA256
+-> curl (1291078) 208.97.177.124/443 TLS1.2 ECDHE-RSA-AES128-GCM-SHA256
 ```
 
 Displaying OpenSSL buffer content is achieved with `--content`.
@@ -89,7 +89,7 @@ peetch tls --content
 The `--secrets` arguments will display TLS Master Secrets extracted from memory. The following example leverages `--write` to write master secrets to simplify decrypting TLS messages with Scapy:
 
 ```shell
-$ (sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 --http1.1) &
+$ (sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 --http1.1 --tlsv1.2) &
 
 # peetch tls --write &
 curl (1293232) 208.97.177.124/443 TLS1.2 ECDHE-RSA-AES128-GCM-SHA256
