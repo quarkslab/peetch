@@ -113,7 +113,8 @@ def dump_command(args):
                               fn_name="kprobe_security_sk_classify_flow")
 
     # Setup the exit handler
-    atexit.register(exit_handler_command, args.interface, args.write, bpf_handler)
+    atexit.register(exit_handler_command, args.interface, args.write,
+                    bpf_handler)
 
     # Load eBPF TC Classifier
     classifier_function = bpf_handler.load_func("process_frame", BPF.SCHED_CLS)
@@ -142,17 +143,17 @@ def tls_command(args):
     ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
 
     if ssl_session_offset == ssl_cipher_offset and \
-       ssl_cipher_offset == master_secret_offset and master_secret_offset == '0':
+       ssl_cipher_offset == master_secret_offset and master_secret_offset == '0':  # noqa: E501
         print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
         sys.exit(1)
 
-    if not args.ssl_session_offset is None:
+    if args.ssl_session_offset is not None:
         ssl_session_offset = str(args.ssl_session_offset)
 
-    if not args.ssl_session_offset is None:
+    if args.ssl_session_offset is not None:
         ssl_cipher_offset = str(args.ssl_cipher_offset)
 
-    if not args.ssl_session_offset is None:
+    if args.ssl_session_offset is not None:
         master_secret_offset = str(args.master_secret_offset)
 
     # Compile eBPF programs
