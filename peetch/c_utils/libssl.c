@@ -13,6 +13,8 @@ struct libssl_offsets_t {
   uint64_t ssl_session;
   uint64_t ssl_cipher;
   uint64_t master_secret;
+  uint64_t client_hello;
+  uint64_t client_random;
 };
 
 
@@ -91,7 +93,7 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
   // TLS 1.2 MASTER_SECRET offset
   uint8_t master_secret[48];
   ret = SSL_SESSION_get_master_key(session,
-                                  (char*)&master_secret, sizeof(master_secret));
+                                  (unsigned char*)&master_secret, sizeof(master_secret));
   if (ret != 48) {
     printf("SSL_SESSION_get_master_key() error - %d\n", fd);
     return offsets;
@@ -107,6 +109,36 @@ struct libssl_offsets_t libssl_offsets(char *ip4_address, uint16_t port) {
       break;
     }
   }
+
+  // Client Random offset
+  uint8_t client_random[32];
+  offsets.client_hello = 0;
+  ret = SSL_get_client_random(ssl, (unsigned char*)&client_random, sizeof(client_random));
+  if (ret != 32) {
+    printf("SSL_get_client_random() error - %d\n", fd);
+    return offsets;
+  }
+  for (uint64_t i=0; i < STRUCTURE_SIZE; i++) {
+    if (offsets.client_hello != 0)
+      break;
+
+    uint64_t value = (uint64_t) ssl + i;
+    uint64_t *ptr = (uint64_t*) value;
+
+    if (*ptr) {
+      for (uint8_t j=0; j < sizeof(STRUCTURE_SIZE) ; j++) {
+          uint8_t *new_ptr = (uint8_t*) ptr + j;
+          if ((new_ptr[0] & 0xFF) == client_random[0] && \
+              (new_ptr[31] & 0xFF) == client_random[31]) {
+            offsets.client_hello = i;
+            offsets.client_random = j;
+            break;
+          }
+      }
+    }
+
+  }
+
   return offsets;
 }
 
@@ -120,6 +152,8 @@ int main() {
   printf("--ssl_session_offset=0x%lx\n", offsets.ssl_session);
   printf("--ssl_cipher_offset=0x%lx\n", offsets.ssl_cipher);
   printf("--master_secret_offset=0x%lx\n", offsets.master_secret);
+  printf("--client_hello=0x%lx\n", offsets.client_hello);
+  printf("--client_random=0x%lx\n", offsets.client_random);
 
   return EXIT_SUCCESS;
 }
