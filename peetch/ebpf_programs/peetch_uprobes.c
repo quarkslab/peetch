@@ -41,6 +41,8 @@ struct TLS_information_t {
     char ciphersuite[CIPHERSUITE_MAX_LEN];
     #define MASTER_SECRET_MAX_LEN 48
     u8 master_secret[MASTER_SECRET_MAX_LEN];
+    #define CLIENT_RANDOM_MAX_LEN 32
+    u8 client_random[CLIENT_RANDOM_MAX_LEN];
 };
 BPF_HASH(tls_information_cache, u32, struct TLS_information_t);
 
@@ -96,6 +98,7 @@ static void parse_session(struct pt_regs *ctx) {
 
     // TLS information sent to userspace
     struct TLS_information_t tls_information;
+    __builtin_memset(&tls_information, 0, sizeof(tls_information)); // it makes the eBPF verifier happy!
 
     // Get a ssl_st pointer
     void *ssl_st_ptr = (void *) PT_REGS_PARM1(ctx);
@@ -133,6 +136,21 @@ static void parse_session(struct pt_regs *ctx) {
                               sizeof(tls_information.ciphersuite), cs_ptr);
     if (ret != 0)
         bpf_trace_printk("parse_session() #5 - bpf_probe_read() failed\n");
+
+    // Retrieve the Client Random
+    void* client_hello_ptr = (void *) (ssl_st_ptr + CLIENT_HELLO_OFFSET);
+    ret = bpf_probe_read(&address, sizeof(address), client_hello_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #6 - bpf_probe_read() failed\n");
+
+    u8 client_random[CLIENT_RANDOM_MAX_LEN + CLIENT_RANDOM_OFFSET];
+    ret = bpf_probe_read(client_random, sizeof(client_random), client_hello_ptr);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #7 - bpf_probe_read() failed\n");
+
+    ret = bpf_probe_read(&tls_information.client_random, sizeof(tls_information.client_random), client_random + CLIENT_RANDOM_OFFSET);
+    if (ret != 0)
+        bpf_trace_printk("parse_session() #8 - bpf_probe_read() failed\n");
 
     u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     tls_information_cache.update(&pid, &tls_information);

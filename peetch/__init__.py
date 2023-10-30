@@ -140,7 +140,8 @@ def tls_command(args):
 
     # Get SSL structures offsets
     offsets = [str(offset) for offset in peetch.utils.get_offsets()]
-    ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
+    ssl_session_offset, ssl_cipher_offset, master_secret_offset, \
+        client_hello_offset, client_random_offset = offsets
 
     if ssl_session_offset == ssl_cipher_offset and \
        ssl_cipher_offset == master_secret_offset and master_secret_offset == '0':  # noqa: E501
@@ -156,6 +157,12 @@ def tls_command(args):
     if args.ssl_session_offset is not None:
         master_secret_offset = str(args.master_secret_offset)
 
+    if args.client_hello_offset is not None:
+        client_hello_offset = str(args.client_hello_offset)
+
+    if args.client_random_offset is not None:
+        client_random_offset = str(args.client_random_offset)
+
     # Compile eBPF programs
     ebpf_programs = BPF_TLS_PROGRAM_SOURCE.replace("DIRECTIONS",
                                                    directions_bool)
@@ -165,6 +172,10 @@ def tls_command(args):
                                           master_secret_offset)
     ebpf_programs = ebpf_programs.replace("SSL_CIPHER_OFFSET",
                                           ssl_cipher_offset)
+    ebpf_programs = ebpf_programs.replace("CLIENT_HELLO_OFFSET",
+                                          client_hello_offset)
+    ebpf_programs = ebpf_programs.replace("CLIENT_RANDOM_OFFSET",
+                                          client_random_offset)
     bpf_handler = BPF(text=ebpf_programs)
 
     # Attach the probes
@@ -197,12 +208,15 @@ def tls_command(args):
         pid_to_delete = None
         master_secret = None
         ciphersuite = None
+        client_random = None
         bpf_map_tls_information = bpf_handler["tls_information_cache"]
         for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
             if pid.value == tls_event.pid:
                 ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
                 master_secret = binascii.hexlify(tls_info.master_secret)
                 master_secret = master_secret.decode("ascii", "ignore")
+                client_random = binascii.hexlify(tls_info.client_random)
+                client_random = client_random.decode("ascii", "ignore")
                 pid_to_delete = [pid]
                 break
 
@@ -233,7 +247,7 @@ def tls_command(args):
 
         # Display TLS secrets
         if (args.secrets or args.write) and tls_event.tls_version == 0x303:
-            key_log = "CLIENT_RANDOM 28071980 %s\n" % master_secret
+            key_log = "CLIENT_RANDOM %s %s\n" % (client_random, master_secret)
             if args.secrets:
                 print("\n   %s\n" % key_log)
             if args.write:
@@ -294,6 +308,10 @@ def main():
                              help="offset to the master secret in an ssl_session_t structure")  # noqa: E501
     dump_parser.add_argument("--ssl_cipher_offset",
                              help="offset to the ssl_cipher structure in an ssl_session_t structure")  # noqa: E501
+    dump_parser.add_argument("--client_hello_offset",
+                             help="offset to the CLIENTHELLO_MSG structure in an ssl structure")  # noqa: E501
+    dump_parser.add_argument("--client_random_offset",
+                             help="offset to the client random in an CLIENTHELLO_MSG structure")  # noqa: E501
     dump_parser.set_defaults(func=tls_command)
 
     # Print the Help message when no arguments are provided

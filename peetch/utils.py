@@ -19,7 +19,9 @@ for root, dirs, files in os.walk(dirname):
 class LIBSSLOffsets(ctypes.Structure):
     _fields_ = [("ssl_session", ctypes.c_uint64),
                 ("ssl_cipher", ctypes.c_uint64),
-                ("master_secret", ctypes.c_uint64)]
+                ("master_secret", ctypes.c_uint64),
+                ("client_hello", ctypes.c_uint64),
+                ("client_random", ctypes.c_uint64)]
 
 
 if UTILS_LIB_PATH:
@@ -32,7 +34,9 @@ if UTILS_LIB_PATH:
         raw_offsets = libssl_offset.libssl_offsets(address_ipv4, port)
         return (raw_offsets.ssl_session,
                 raw_offsets.ssl_cipher,
-                raw_offsets.master_secret)
+                raw_offsets.master_secret,
+                raw_offsets.client_hello,
+                raw_offsets.client_random)
 else:
     print("ERROR: cannot find the utils_lib dynamic library!", file=sys.stderr)
     sys.exit(1)
