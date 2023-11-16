@@ -23,6 +23,8 @@ BPF_DUMP_PROGRAM_FILENAME = "%s/peetch_kprobes.c" % EBPF_PROGRAMS_DIRNAME
 BPF_DUMP_PROGRAM_SOURCE = open(BPF_DUMP_PROGRAM_FILENAME).read()
 BPF_TLS_PROGRAM_FILENAME = "%s/peetch_uprobes.c" % EBPF_PROGRAMS_DIRNAME
 BPF_TLS_PROGRAM_SOURCE = open(BPF_TLS_PROGRAM_FILENAME).read()
+BPF_PROXY_PROGRAM_FILENAME = "%s/peetch_proxy.c" % EBPF_PROGRAMS_DIRNAME
+BPF_PROXY_PROGRAM_SOURCE = open(BPF_PROXY_PROGRAM_FILENAME).read()
 PACKETS_CAPTURED = []
 
 
@@ -302,7 +304,7 @@ def handle_connect_event(cpu, data, size):
 
 def proxy_command(args):
     # Compile eBPF programs
-    bpf_handler = BPF(text=BPF_DUMP_PROGRAM_SOURCE)
+    bpf_handler = BPF(text=BPF_PROXY_PROGRAM_SOURCE)
 
     # Load the eBPF function
     connect_function = bpf_handler.load_func("connect_v4_prog",
