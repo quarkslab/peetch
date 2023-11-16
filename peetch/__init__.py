@@ -12,7 +12,7 @@ import struct
 import sys
 import time
 
-from bcc import BPF
+from bcc import BPF, BPFProgType, BPFAttachType
 import pyroute2
 from scapy.all import Ether, wrpcapng, hexdump
 
@@ -67,6 +67,17 @@ def exit_handler_command(interface, filename, bpf_handler):
     unload_classifier(interface)
     if filename:
         wrpcapng(filename, PACKETS_CAPTURED)
+
+
+def exit_handler_proxy(bpf_handler, connect_function, cgroup_fd):
+    """
+    Exit proxy nicely
+    """
+    time.sleep(0.01)
+    bpf_handler.detach_func(connect_function, cgroup_fd,
+                            BPFAttachType.CGROUP_INET4_CONNECT)
+    if cgroup_fd > 0:
+        os.close(cgroup_fd)
 
 
 def handle_skb_event(cpu, data, size):
@@ -271,6 +282,52 @@ def tls_command(args):
             sys.exit()
 
 
+def handle_connect_event(cpu, data, size):
+    """
+    Handle connect events from the kernel
+    """
+
+    # Structure retrieved from the kernel
+    class DataEvent(ct.Structure):
+        _fields_ = [("pid", ct.c_uint32),
+                    ("name", ct.c_char * 64)]
+
+    # Map the data from kernel to the structure
+    data_event = ct.cast(data, ct.POINTER(DataEvent)).contents
+    pid = data_event.pid
+    process_name = data_event.name.decode("ascii", "replace")
+
+    print(f"{process_name}/{pid}")
+
+
+def proxy_command(args):
+    # Compile eBPF programs
+    bpf_handler = BPF(text=BPF_DUMP_PROGRAM_SOURCE)
+
+    # Load the eBPF function
+    connect_function = bpf_handler.load_func("connect_v4_prog",
+                                             prog_type=BPFProgType.CGROUP_SOCK_ADDR,  # noqa: E501
+                                             attach_type=BPFAttachType.CGROUP_INET4_CONNECT)  # noqa: E501
+
+    # Attach the eBPF function to the default cgroup
+    cgroup_fd = os.open("/sys/fs/cgroup", os.O_RDONLY)
+    bpf_handler.attach_func(connect_function, cgroup_fd,
+                            BPFAttachType.CGROUP_INET4_CONNECT)
+
+    print("[!] Intercepting calls to connect()")
+
+    # Setup the exit handler
+    atexit.register(exit_handler_proxy, bpf_handler,
+                    connect_function, cgroup_fd)
+
+    bpf_handler["connect_events"].open_perf_buffer(handle_connect_event)
+    while True:
+        try:
+            bpf_handler.perf_buffer_poll()
+        except KeyboardInterrupt:
+            sys.exit()
+
+
 def main():
     global args
     argv = sys.argv[1:]
@@ -313,6 +370,11 @@ def main():
     dump_parser.add_argument("--client_random_offset",
                              help="offset to the client random in an CLIENTHELLO_MSG structure")  # noqa: E501
     dump_parser.set_defaults(func=tls_command)
+
+    # Prepare the 'proxy' subcommand
+    dump_parser = subparser.add_parser("proxy",
+                                       help="Automatically intercept TLS connections")  # noqa: E501
+    dump_parser.set_defaults(func=proxy_command)
 
     # Print the Help message when no arguments are provided
     if not argv:

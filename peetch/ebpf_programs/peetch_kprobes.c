@@ -25,6 +25,7 @@ struct data_t {
 
 BPF_HASH(pid_cache, struct key_t *);
 
+BPF_PERF_OUTPUT(connect_events);
 BPF_PERF_OUTPUT(skb_events);
 
 int process_frame(struct __sk_buff *skb) {
@@ -101,4 +102,25 @@ int kprobe_security_sk_classify_flow(struct pt_regs *ctx, struct sock *sk, struc
   pid_cache.update((struct key_t **) &key, (unsigned long long *) &data);
 
   return 0;
+}
+
+int connect_v4_prog(struct bpf_sock_addr *ctx) {
+  struct data_t data;
+
+  // Get and store the PID
+  u64 id = bpf_get_current_pid_tgid();
+  data.pid = id >> 32;
+
+  // Get and store the process name
+  bpf_get_current_comm(data.name, 64);
+
+  // Send the event to userland
+  connect_events.perf_submit(ctx, &data, sizeof(data));
+
+  /*
+  Note:
+  - 1: accept
+  - 0: discard
+  */
+  return 1;
 }
