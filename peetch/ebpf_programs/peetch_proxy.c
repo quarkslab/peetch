@@ -46,7 +46,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
   // Retrieve the filename
   long ret = bpf_probe_read((void*)&filename, _PATH_MAX, (void*)args->filename);
    if (ret != 0) {
-     bpf_trace_printk("sys_enter_openat() - bpf_probe_read() failed\n");
+     //bpf_trace_printk("sys_enter_openat() - bpf_probe_read() failed\n");
      return 0;
    }
 

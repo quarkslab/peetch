@@ -2,6 +2,7 @@
 # Guillaume Valadon <gvaladon@quarkslab.com>
 
 import argparse
+import asyncio
 import atexit
 import ctypes as ct
 import binascii
@@ -299,7 +300,7 @@ def handle_connect_event(cpu, data, size):
     pid = data_event.pid
     process_name = data_event.name.decode("ascii", "replace")
 
-    print(f"{process_name}/{pid}")
+    print(f"\r{process_name}/{pid}")
 
 
 def proxy_command(args):
@@ -323,11 +324,31 @@ def proxy_command(args):
                     connect_function, cgroup_fd)
 
     bpf_handler["connect_events"].open_perf_buffer(handle_connect_event)
-    while True:
-        try:
-            bpf_handler.perf_buffer_poll()
-        except KeyboardInterrupt:
-            sys.exit()
+
+    async def poll_perf():
+        """
+        async perf buffer polling
+        """
+        def tmp_poll_perf():
+            while True:
+                try:
+                    bpf_handler.perf_buffer_poll()
+                except KeyboardInterrupt:
+                    sys.exit()
+        await asyncio.to_thread(tmp_poll_perf)
+
+    async def server():
+        """
+        async dummy processing
+        """
+        while True:
+            print(".", end="", flush=True)
+            await asyncio.sleep(0.5)
+
+    async def all_tasks():
+        await asyncio.gather(server(), poll_perf())
+
+    asyncio.run(all_tasks())
 
 
 def main():
