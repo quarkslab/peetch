@@ -29,7 +29,8 @@ int connect_v4_prog(struct bpf_sock_addr *ctx) {
     return 1;
   if (*tmp_id != id)
     return 1;
-  pid_cache.delete((u64*) &id);
+  if (ctx->user_port == 0xBB01) // 443
+    pid_cache.delete((u64*) &id);
 
   // Get and store the process name
   bpf_get_current_comm(data.name, 64);
