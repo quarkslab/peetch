@@ -18,7 +18,7 @@ import pyroute2
 from scapy.all import Ether, wrpcapng, hexdump
 
 
-global BPF_HANDLER
+global BPF_HANDLER, BPF_TLS_HANDLER
 
 EBPF_PROGRAMS_DIRNAME = os.path.join(os.path.dirname(__file__),
                                      "ebpf_programs/")
@@ -145,15 +145,79 @@ def dump_command(args):
         pass
 
 
-def tls_command(args):
-    # Process arguments
-    if args.content:
-        args.directions = True
+def handle_tls_event(cpu, data, size):
+    class TLSEvent(ct.Structure):
+        _fields_ = [("address", ct.c_uint32),
+                    ("port", ct.c_uint16),
+                    ("tls_version", ct.c_uint16),
+                    ("comm", ct.c_char * 64),
+                    ("message", ct.c_uint8 * 64),
+                    ("message_length", ct.c_uint32),
+                    ("pid", ct.c_uint32),
+                    ("is_read", ct.c_uint32)]
 
-    directions_bool = "1"
+    # Map the data from kernel to the structure
+    tls_event = ct.cast(data, ct.POINTER(TLSEvent)).contents
+
+    # Get TLS information
+    pid_to_delete = None
+    master_secret = None
+    ciphersuite = None
+    bpf_map_tls_information = BPF_TLS_HANDLER["tls_information_cache"]
+    for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
+        if pid.value == tls_event.pid:
+            ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
+            master_secret = binascii.hexlify(tls_info.master_secret)
+            master_secret = master_secret.decode("ascii", "ignore")
+            pid_to_delete = [pid]
+            break
+
+    # Delete pid from the eBPF map
+    if not pid_to_delete:
+        bpf_map_tls_information.items_delete_batch(pid_to_delete)
+
+    # Unpack the IPv4 destination address
+    addr = struct.pack("I", tls_event.address)
+
+    # Discard empty content
+    if args.content and tls_event.message_length == 0:
+        return
+
+    # Display the TLS event
     if args.directions:
-        directions_bool = "0"
+        if tls_event.is_read:
+            print("->", end=" ")
+        else:
+            print("<-", end=" ")
+    print("%s (%d)" % (tls_event.comm.decode("ascii", "replace"),
+                       tls_event.pid), end=" ")
+    print("%s/%d" % (socket.inet_ntop(socket.AF_INET, addr),
+                     socket.ntohs(tls_event.port)), end=" ")
 
+    version = (tls_event.tls_version & 0xF) - 1
+    print("TLS1.%d %s" % (version, ciphersuite))
+
+    # Display TLS secrets
+    if (args.secrets or args.write) and tls_event.tls_version == 0x303:
+        key_log = "CLIENT_RANDOM 28071980 %s\n" % master_secret
+        if args.secrets:
+            print("\n   %s\n" % key_log)
+        if args.write:
+            fd = open("%d-master_secret.log" % pid.value, "w")
+            fd.write(key_log)
+            fd.close()
+
+    # Display the message content in hexadecimal
+    if args.content and tls_event.message_length:
+        hex_message = hexdump(tls_event.message[:tls_event.message_length],
+                              dump=True)
+        print("\n   ", end="")
+        print(hex_message.replace("\n", "\n   "))
+        print()
+
+
+def _tls_ebpf_programs(directions_bool, args_ssl_session_offset,
+                       args_ssl_cipher_offset, args_master_secret_offset):
     # Get SSL structures offsets
     offsets = [str(offset) for offset in peetch.utils.get_offsets()]
     ssl_session_offset, ssl_cipher_offset, master_secret_offset, \
@@ -161,17 +225,16 @@ def tls_command(args):
 
     if ssl_session_offset == ssl_cipher_offset and \
        ssl_cipher_offset == master_secret_offset and master_secret_offset == '0':  # noqa: E501
-        print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
-        sys.exit(1)
+        return None
 
-    if args.ssl_session_offset is not None:
-        ssl_session_offset = str(args.ssl_session_offset)
+    if args_ssl_session_offset is not None:
+        ssl_session_offset = str(args_ssl_session_offset)
 
-    if args.ssl_session_offset is not None:
-        ssl_cipher_offset = str(args.ssl_cipher_offset)
+    if args_ssl_cipher_offset is not None:
+        ssl_cipher_offset = str(args_ssl_cipher_offset)
 
-    if args.ssl_session_offset is not None:
-        master_secret_offset = str(args.master_secret_offset)
+    if args_master_secret_offset is not None:
+        master_secret_offset = str(args_master_secret_offset)
 
     if args.client_hello_offset is not None:
         client_hello_offset = str(args.client_hello_offset)
@@ -192,7 +255,30 @@ def tls_command(args):
                                           client_hello_offset)
     ebpf_programs = ebpf_programs.replace("CLIENT_RANDOM_OFFSET",
                                           client_random_offset)
+
+    return ebpf_programs
+
+
+def tls_command(args):
+    global BPF_TLS_HANDLER
+
+    # Process arguments
+    if args.content:
+        args.directions = True
+
+    directions_bool = "1"
+    if args.directions:
+        directions_bool = "0"
+
+    ebpf_programs = _tls_ebpf_programs(directions_bool,
+                                       args.ssl_session_offset,
+                                       args.ssl_cipher_offset,
+                                       args.master_secret_offset)
+    if ebpf_programs is None:
+        print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
+        sys.exit(1)
     bpf_handler = BPF(text=ebpf_programs)
+    BPF_TLS_HANDLER = bpf_handler
 
     # Attach the probes
     try:
@@ -205,6 +291,7 @@ def tls_command(args):
     except Exception:
         print("tls - cannot attach to eBPF probes!")
         sys.exit()
+
 
     def handle_tls_event(cpu, data, size):
         class TLSEvent(ct.Structure):
@@ -295,10 +382,8 @@ def handle_connect_event(cpu, data, size):
     # Structures retrieved from the kernel
     class DataEvent(ct.Structure):
         _fields_ = [("pid", ct.c_uint32),
-                    ("name", ct.c_char * 64)]
-
-    class Destination(ct.Structure):
-        _fields_ = [("address", ct.c_uint32),
+                    ("name", ct.c_char * 64),
+                    ("address", ct.c_uint32),
                     ("port", ct.c_uint32)]
 
     # Map the data from kernel to the structure
@@ -307,19 +392,38 @@ def handle_connect_event(cpu, data, size):
     process_name = data_event.name.decode("ascii", "replace")
 
     # Retrieve destination IP and port
-    destination_raw = BPF_HANDLER["destination_cache"].get(ct.c_uint32(pid))
-    address = "?"
-    port = "?"
-    if destination_raw:
-        address_packed = struct.pack("I", destination_raw.ip)
-        address = socket.inet_ntop(socket.AF_INET, address_packed)
-        port = socket.ntohs(destination_raw.port)
+    address_packed = struct.pack("I", data_event.address)
+    address = socket.inet_ntop(socket.AF_INET, address_packed)
+    port = socket.ntohs(data_event.port)
     print(f"\r{process_name}/{pid} -> {address}/{port}")
+
+    # Get TLS information
+    # Note: sleeping could be avoided by grabbing the TLS information from
+    #       a perf buffer, then accessing DataEvent
+    time.sleep(0.1)
+    pid_to_delete = None
+    master_secret = None
+    ciphersuite = None
+    bpf_map_tls_information = BPF_TLS_HANDLER["tls_information_cache"]
+    for tls_pid, tls_info in bpf_map_tls_information.items_lookup_batch():
+        if tls_pid.value == pid:
+            ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
+            master_secret = binascii.hexlify(tls_info.master_secret)
+            master_secret = master_secret.decode("ascii", "ignore")
+            pid_to_delete = [pid]
+            break
+    if ciphersuite and len(ciphersuite):
+        print("  ", master_secret, ciphersuite)
+
+    # Delete pid from the eBPF map
+    if not pid_to_delete:
+        bpf_map_tls_information.items_delete_batch(pid_to_delete)
 
 
 def proxy_command(args):
+    global BPF_HANDLER, BPF_TLS_HANDLER
+
     # Compile eBPF programs
-    global BPF_HANDLER
     bpf_handler = BPF(text=BPF_PROXY_PROGRAM_SOURCE)
     BPF_HANDLER = bpf_handler
 
@@ -332,6 +436,28 @@ def proxy_command(args):
     cgroup_fd = os.open("/sys/fs/cgroup", os.O_RDONLY)
     bpf_handler.attach_func(connect_function, cgroup_fd,
                             BPFAttachType.CGROUP_INET4_CONNECT)
+
+    # Get SSL structures offsets
+    offsets = [str(offset) for offset in peetch.utils.get_offsets()]
+    ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
+
+    # Attach the SSL_* uprobes
+    ebpf_programs = _tls_ebpf_programs("1", None, None, None)
+    if ebpf_programs is None:
+        print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
+        sys.exit(1)
+    bpf_tls_handler = BPF(text=ebpf_programs)
+    BPF_TLS_HANDLER = bpf_tls_handler
+    try:
+        bpf_tls_handler.attach_uprobe(name="ssl",
+                                      sym="SSL_write", fn_name="SSL_write")
+        bpf_tls_handler.attach_uprobe(name="ssl",
+                                      sym="SSL_read", fn_name="SSL_read")
+        bpf_tls_handler.attach_uretprobe(name="ssl",
+                                         sym="SSL_read", fn_name="SSL_read_ret")  # noqa: E501
+    except Exception:
+        print("proxy - cannot attach to eBPF SSL_* uprobes!")
+        sys.exit()
 
     print("[!] Intercepting calls to connect()")
 
@@ -358,8 +484,8 @@ def proxy_command(args):
         async dummy processing
         """
         while True:
-            print(".", end="", flush=True)
             await asyncio.sleep(0.5)
+            print(".", end="", flush=True)
 
     async def all_tasks():
         await asyncio.gather(server(), poll_perf())
