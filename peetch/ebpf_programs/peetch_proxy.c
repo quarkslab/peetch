@@ -6,9 +6,15 @@ struct data_t {
   char name[64];
 };
 
+struct destination_t {
+  u32 ip;
+  u32 port;
+};
+
 BPF_PERF_OUTPUT(connect_events);
 
 BPF_HASH(pid_cache, u64);
+BPF_HASH(destination_cache, u32, struct destination_t);
 
 int connect_v4_prog(struct bpf_sock_addr *ctx) {
   struct data_t data;
@@ -27,6 +33,12 @@ int connect_v4_prog(struct bpf_sock_addr *ctx) {
 
   // Get and store the process name
   bpf_get_current_comm(data.name, 64);
+
+  // Get and store the real destination IPv4 address and port
+  struct destination_t destination;
+  destination.ip = ctx->user_ip4;
+  destination.port = ctx->user_port;
+  destination_cache.update(&data.pid, &destination);
 
   // Send the event to userland
   connect_events.perf_submit(ctx, &data, sizeof(data));

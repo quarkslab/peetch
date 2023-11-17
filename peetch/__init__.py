@@ -18,6 +18,8 @@ import pyroute2
 from scapy.all import Ether, wrpcapng, hexdump
 
 
+global BPF_HANDLER
+
 EBPF_PROGRAMS_DIRNAME = os.path.join(os.path.dirname(__file__),
                                      "ebpf_programs/")
 BPF_DUMP_PROGRAM_FILENAME = "%s/peetch_kprobes.c" % EBPF_PROGRAMS_DIRNAME
@@ -290,22 +292,36 @@ def handle_connect_event(cpu, data, size):
     Handle connect events from the kernel
     """
 
-    # Structure retrieved from the kernel
+    # Structures retrieved from the kernel
     class DataEvent(ct.Structure):
         _fields_ = [("pid", ct.c_uint32),
                     ("name", ct.c_char * 64)]
+
+    class Destination(ct.Structure):
+        _fields_ = [("address", ct.c_uint32),
+                    ("port", ct.c_uint32)]
 
     # Map the data from kernel to the structure
     data_event = ct.cast(data, ct.POINTER(DataEvent)).contents
     pid = data_event.pid
     process_name = data_event.name.decode("ascii", "replace")
 
-    print(f"\r{process_name}/{pid}")
+    # Retrieve destination IP and port
+    destination_raw = BPF_HANDLER["destination_cache"].get(ct.c_uint32(pid))
+    address = "?"
+    port = "?"
+    if destination_raw:
+        address_packed = struct.pack("I", destination_raw.ip)
+        address = socket.inet_ntop(socket.AF_INET, address_packed)
+        port = socket.ntohs(destination_raw.port)
+    print(f"\r{process_name}/{pid} -> {address}/{port}")
 
 
 def proxy_command(args):
     # Compile eBPF programs
+    global BPF_HANDLER
     bpf_handler = BPF(text=BPF_PROXY_PROGRAM_SOURCE)
+    BPF_HANDLER = bpf_handler
 
     # Load the eBPF function
     connect_function = bpf_handler.load_func("connect_v4_prog",
@@ -332,7 +348,7 @@ def proxy_command(args):
         def tmp_poll_perf():
             while True:
                 try:
-                    bpf_handler.perf_buffer_poll()
+                    bpf_handler.perf_buffer_poll(timeout=100)
                 except KeyboardInterrupt:
                     sys.exit()
         await asyncio.to_thread(tmp_poll_perf)
