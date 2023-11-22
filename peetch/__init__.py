@@ -398,9 +398,9 @@ def handle_connect_event(cpu, data, size):
     print(f"\r{process_name}/{pid} -> {address}/{port}")
 
     # Get TLS information
-    # Note: sleeping could be avoided by grabbing the TLS information from
+    # Note: sleeping could likely be avoided by grabbing the TLS information from
     #       a perf buffer, then accessing DataEvent
-    time.sleep(0.1)
+    time.sleep(0.2)
     pid_to_delete = None
     master_secret = None
     ciphersuite = None
@@ -424,7 +424,9 @@ def proxy_command(args):
     global BPF_HANDLER, BPF_TLS_HANDLER
 
     # Compile eBPF programs
-    bpf_handler = BPF(text=BPF_PROXY_PROGRAM_SOURCE)
+    ebpf_programs = BPF_PROXY_PROGRAM_SOURCE.replace("PEETCH_PROXY_PID",
+                                                     str(os.getpid()))
+    bpf_handler = BPF(text=ebpf_programs)
     BPF_HANDLER = bpf_handler
 
     # Load the eBPF function
@@ -479,7 +481,7 @@ def proxy_command(args):
                     sys.exit()
         await asyncio.to_thread(tmp_poll_perf)
 
-    async def server():
+    async def dots():
         """
         async dummy processing
         """
@@ -487,8 +489,63 @@ def proxy_command(args):
             await asyncio.sleep(0.5)
             print(".", end="", flush=True)
 
+    async def pipe(reader, writer, direction):
+        """"
+        From https://stackoverflow.com/a/46422554
+        """
+        try:
+            while not reader.at_eof():
+                data = await reader.read(2048)
+                #print("data", direction, data)
+                writer.write(data)
+        finally:
+            writer.close()
+
+    async def handle_client(local_reader, local_writer):
+        ip_src, port_src = local_reader._transport.get_extra_info('peername')
+        print("---", ip_src, port_src)
+
+        bpf_map_destination_cache = BPF_HANDLER["destination_cache"]
+
+        real_address = None
+        real_port = None
+        destination_key_to_delete = None
+
+        for destination_key, destination_value in bpf_map_destination_cache.items_lookup_batch():
+            real_address = socket.inet_ntop(socket.AF_INET, struct.pack("I", destination_value.value >> 32))
+            real_port = socket.ntohs(destination_value.value & 0xFFFFFFFF)
+            print(socket.ntohs(destination_key.value), real_address, real_port)
+            if socket.ntohs(destination_key.value) == port_src:
+                destination_key_to_delete = [destination_key]
+                break
+
+        # TODO: clean the cache
+        #print("DBG")
+        #if destination_key_to_delete is not None:
+        #    bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)
+        #else:
+        #    print("!!! Did not find the real destination")
+        #    local_writer.close()
+        #    return
+        #print("dbg")
+
+        try:
+            remote_reader, remote_writer = await asyncio.open_connection(real_address, real_port)
+            pipe1 = pipe(local_reader, remote_writer, "->")
+            pipe2 = pipe(remote_reader, local_writer, "<-")
+            await asyncio.gather(pipe1, pipe2)
+        finally:
+            local_writer.close()
+
+    async def tcp_proxy():
+        """
+        async TCP proxy
+        """
+        server = await asyncio.start_server(handle_client, "127.0.0.1", 2807)
+        await server.serve_forever()
+
     async def all_tasks():
-        await asyncio.gather(server(), poll_perf())
+        await asyncio.gather(tcp_proxy(), dots(), poll_perf())
 
     asyncio.run(all_tasks())
 

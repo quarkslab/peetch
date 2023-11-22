@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 // Guillaume Valadon <gvaladon@quarkslab.com>
 
+#include <linux/bpf.h>
+#include <linux/in.h>
+
 struct data_t {
   u32 pid;
   char name[64];
@@ -12,6 +15,8 @@ BPF_PERF_OUTPUT(connect_events);
 
 BPF_HASH(pid_cache, u64);
 
+BPF_HASH(destination_cache, u16, u64);
+
 int connect_v4_prog(struct bpf_sock_addr *ctx) {
   struct data_t data;
 
@@ -19,24 +24,48 @@ int connect_v4_prog(struct bpf_sock_addr *ctx) {
   u64 id = bpf_get_current_pid_tgid();
   data.pid = id >> 32;
 
+  // Do not intercept connection from peetch itself
+  if (PEETCH_PROXY_PID == data.pid)
+    return 1;
+
+  // Do not intercept well known TCP services
+  if (ctx->user_port == bpf_htons(53)) // DNS
+    return 1;
+
   // Check if the PID is in the cache
   u64 *tmp_id = pid_cache.lookup((u64*) &id);
   if (tmp_id == NULL)
     return 1;
   if (*tmp_id != id)
     return 1;
-  if (ctx->user_port == 0xBB01) // 443
-    pid_cache.delete((u64*) &id);
 
   // Get and store the process name
   bpf_get_current_comm(data.name, 64);
+
+  // Rewrite the source port
+  struct sockaddr_in sa = {};
+	sa.sin_family = AF_INET;
+  u16 new_port = bpf_htons(data.pid & 0xFFFF); // lower part of the PID will be used as the TCP source port
+  sa.sin_port = new_port;
+  sa.sin_addr.s_addr = bpf_htonl(0x7f000001); // 127.0.0.1
+
+	if (bpf_bind(ctx, (struct sockaddr *) &sa, sizeof(sa)) != 0)
+		return 0;
 
   // Get and store the real destination IPv4 address and port
   data.ip = ctx->user_ip4;
   data.port = ctx->user_port;
 
-  // Send the event to userland
+  // Send the connect event to userland
   connect_events.perf_submit(ctx, &data, sizeof(data));
+
+  // Store the real destination into the cache
+  u64 tmp = ((u64)ctx->user_ip4 << 32) + ctx->user_port;
+  destination_cache.update(&new_port, &tmp);
+
+  // Divert the connection to peetch proxy
+  ctx->user_ip4 = 0x0100007f;
+	ctx->user_port = bpf_htons(2807);
 
   /*
   Note:
