@@ -398,8 +398,8 @@ def handle_connect_event(cpu, data, size):
     print(f"\r{process_name}/{pid} -> {address}/{port}")
 
     # Get TLS information
-    # Note: sleeping could likely be avoided by grabbing the TLS information from
-    #       a perf buffer, then accessing DataEvent
+    # Note: sleeping could likely be avoided by grabbing the TLS information
+    #       from a perf buffer, then accessing DataEvent
     time.sleep(0.2)
     pid_to_delete = None
     master_secret = None
@@ -496,7 +496,7 @@ def proxy_command(args):
         try:
             while not reader.at_eof():
                 data = await reader.read(2048)
-                #print("data", direction, data)
+                #print("data", direction, data)  # noqa: E265
                 writer.write(data)
         finally:
             writer.close()
@@ -511,26 +511,24 @@ def proxy_command(args):
         real_port = None
         destination_key_to_delete = None
 
-        for destination_key, destination_value in bpf_map_destination_cache.items_lookup_batch():
-            real_address = socket.inet_ntop(socket.AF_INET, struct.pack("I", destination_value.value >> 32))
+        for destination_key, destination_value in bpf_map_destination_cache.items_lookup_batch():  # noqa: E501
+            real_address = socket.inet_ntop(socket.AF_INET, struct.pack("I", destination_value.value >> 32))  # noqa: E501
             real_port = socket.ntohs(destination_value.value & 0xFFFFFFFF)
             print(socket.ntohs(destination_key.value), real_address, real_port)
             if socket.ntohs(destination_key.value) == port_src:
-                destination_key_to_delete = [destination_key]
+                ct_array = ct.c_uint16 * 1
+                destination_key_to_delete = ct_array(destination_key)
                 break
 
-        # TODO: clean the cache
-        #print("DBG")
-        #if destination_key_to_delete is not None:
-        #    bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)
-        #else:
-        #    print("!!! Did not find the real destination")
-        #    local_writer.close()
-        #    return
-        #print("dbg")
+        if destination_key_to_delete:
+            bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)  # noqa: E501
+        else:
+            print("!!! Did not find the real destination")
+            local_writer.close()
+            return
 
         try:
-            remote_reader, remote_writer = await asyncio.open_connection(real_address, real_port)
+            remote_reader, remote_writer = await asyncio.open_connection(real_address, real_port)  # noqa: E501
             pipe1 = pipe(local_reader, remote_writer, "->")
             pipe2 = pipe(remote_reader, local_writer, "<-")
             await asyncio.gather(pipe1, pipe2)
@@ -545,7 +543,10 @@ def proxy_command(args):
         await server.serve_forever()
 
     async def all_tasks():
-        await asyncio.gather(tcp_proxy(), dots(), poll_perf())
+        tasks = [tcp_proxy(), poll_perf()]
+        if args.debug:
+            tasks += [dots()]
+        await asyncio.gather(*tasks)
 
     asyncio.run(all_tasks())
 
@@ -571,32 +572,30 @@ def main():
     dump_parser.set_defaults(func=dump_command)
 
     # Prepare the 'identify' subcommand
-    dump_parser = subparser.add_parser("tls",
-                                       help="Identify processes that uses TLS")
-    dump_parser.add_argument("--directions", action="store_true",
-                             help="display read & write calls")
-    dump_parser.add_argument("--content", action="store_true",
-                             help="display buffers content")
-    dump_parser.add_argument("--secrets", action="store_true",
-                             help="display TLS secrets")
-    dump_parser.add_argument("--write", action="store_true",
-                             help="write TLS secrets to files")
-    dump_parser.add_argument("--ssl_session_offset",
-                             help="offset to the ssl_session_t structure")
-    dump_parser.add_argument("--master_secret_offset",
-                             help="offset to the master secret in an ssl_session_t structure")  # noqa: E501
-    dump_parser.add_argument("--ssl_cipher_offset",
-                             help="offset to the ssl_cipher structure in an ssl_session_t structure")  # noqa: E501
-    dump_parser.add_argument("--client_hello_offset",
-                             help="offset to the CLIENTHELLO_MSG structure in an ssl structure")  # noqa: E501
-    dump_parser.add_argument("--client_random_offset",
-                             help="offset to the client random in an CLIENTHELLO_MSG structure")  # noqa: E501
-    dump_parser.set_defaults(func=tls_command)
+    tls_parser = subparser.add_parser("tls",
+                                      help="Identify processes that uses TLS")
+    tls_parser.add_argument("--directions", action="store_true",
+                            help="display read & write calls")
+    tls_parser.add_argument("--content", action="store_true",
+                            help="display buffers content")
+    tls_parser.add_argument("--secrets", action="store_true",
+                            help="display TLS secrets")
+    tls_parser.add_argument("--write", action="store_true",
+                            help="write TLS secrets to files")
+    tls_parser.add_argument("--ssl_session_offset",
+                            help="offset to the ssl_session_t structure")
+    tls_parser.add_argument("--master_secret_offset",
+                            help="offset to the master secret in an ssl_session_t structure")  # noqa: E501
+    tls_parser.add_argument("--ssl_cipher_offset",
+                            help="offset to the ssl_cipher structure in an ssl_session_t structure")  # noqa: E501
+    tls_parser.set_defaults(func=tls_command)
 
     # Prepare the 'proxy' subcommand
-    dump_parser = subparser.add_parser("proxy",
-                                       help="Automatically intercept TLS connections")  # noqa: E501
-    dump_parser.set_defaults(func=proxy_command)
+    proxy_parser = subparser.add_parser("proxy",
+                                        help="Automatically intercept TLS connections")  # noqa: E501
+    proxy_parser.add_argument("--debug", action="store_true",
+                              help="display debug information")
+    proxy_parser.set_defaults(func=proxy_command)
 
     # Print the Help message when no arguments are provided
     if not argv:
