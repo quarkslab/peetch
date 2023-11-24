@@ -374,50 +374,57 @@ def tls_command(args):
             sys.exit()
 
 
-def handle_connect_event(cpu, data, size):
-    """
-    Handle connect events from the kernel
-    """
+def retrieve_client_information(bpf_handler, port_src):
 
-    # Structures retrieved from the kernel
-    class DataEvent(ct.Structure):
-        _fields_ = [("pid", ct.c_uint32),
-                    ("name", ct.c_char * 64),
-                    ("address", ct.c_uint32),
-                    ("port", ct.c_uint32)]
+    process_name, process_pid, ip_dst, port_dst = [None] * 4
+    bpf_map_destination_cache = bpf_handler["destination_cache"]
 
-    # Map the data from kernel to the structure
-    data_event = ct.cast(data, ct.POINTER(DataEvent)).contents
-    pid = data_event.pid
-    process_name = data_event.name.decode("ascii", "replace")
+    destination_key_to_delete = None
 
-    # Retrieve destination IP and port
-    address_packed = struct.pack("I", data_event.address)
-    address = socket.inet_ntop(socket.AF_INET, address_packed)
-    port = socket.ntohs(data_event.port)
-    print(f"\r{process_name}/{pid} -> {address}/{port}")
+    for destination_key, destination_data in bpf_map_destination_cache.items_lookup_batch():  # noqa: E501
+        process_pid = destination_data.pid
+        process_name = destination_data.name.decode("ascii", "replace")
 
-    # Get TLS information
-    # Note: sleeping could likely be avoided by grabbing the TLS information
-    #       from a perf buffer, then accessing DataEvent
-    time.sleep(0.2)
-    pid_to_delete = None
-    master_secret = None
-    ciphersuite = None
-    bpf_map_tls_information = BPF_TLS_HANDLER["tls_information_cache"]
-    for tls_pid, tls_info in bpf_map_tls_information.items_lookup_batch():
-        if tls_pid.value == pid:
-            ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
-            master_secret = binascii.hexlify(tls_info.master_secret)
-            master_secret = master_secret.decode("ascii", "ignore")
-            pid_to_delete = [pid]
+        # Retrieve destination IP and port
+        address_packed = struct.pack("I", destination_data.ip)
+        ip_dst = socket.inet_ntop(socket.AF_INET, address_packed)
+        port_dst = socket.ntohs(destination_data.port)
+
+        if socket.ntohs(destination_key.value) == port_src:
+            ct_array = ct.c_uint16 * 1
+            destination_key_to_delete = ct_array(destination_key)
             break
-    if ciphersuite and len(ciphersuite):
-        print("  ", master_secret, ciphersuite)
+
+    if destination_key_to_delete:
+        bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)
+
+    return process_name, process_pid, ip_dst, port_dst
+
+
+def retrieve_tls_information(bpf_handler, process_pid):
+    ciphersuite, master_secret = [None] * 2
+
+    retries = 5
+    pid_to_delete = None
+    bpf_map_tls_information = bpf_handler["tls_information_cache"]
+    while pid_to_delete is None and retries:
+        retries -= 1
+        for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
+            if pid.value == process_pid:
+                ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
+                master_secret = binascii.hexlify(tls_info.master_secret)
+                master_secret = master_secret.decode("ascii", "ignore")
+                if len(ciphersuite):
+                    ct_array = ct.c_uint * 1
+                    pid_to_delete = ct_array(pid)
+                    break
+        time.sleep(0.005)
 
     # Delete pid from the eBPF map
-    if not pid_to_delete:
+    if pid_to_delete:
         bpf_map_tls_information.items_delete_batch(pid_to_delete)
+
+    return ciphersuite, master_secret
 
 
 def proxy_command(args):
@@ -467,20 +474,6 @@ def proxy_command(args):
     atexit.register(exit_handler_proxy, bpf_handler,
                     connect_function, cgroup_fd)
 
-    bpf_handler["connect_events"].open_perf_buffer(handle_connect_event)
-
-    async def poll_perf():
-        """
-        async perf buffer polling
-        """
-        def tmp_poll_perf():
-            while True:
-                try:
-                    bpf_handler.perf_buffer_poll(timeout=100)
-                except KeyboardInterrupt:
-                    sys.exit()
-        await asyncio.to_thread(tmp_poll_perf)
-
     async def dots():
         """
         async dummy processing
@@ -489,7 +482,7 @@ def proxy_command(args):
             await asyncio.sleep(0.5)
             print(".", end="", flush=True)
 
-    async def pipe(reader, writer, direction):
+    async def pipe(reader, writer, pid, direction):
         """"
         From https://stackoverflow.com/a/46422554
         """
@@ -498,39 +491,36 @@ def proxy_command(args):
                 data = await reader.read(2048)
                 #print("data", direction, data)  # noqa: E265
                 writer.write(data)
+                ciphersuite, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
+                if ciphersuite:
+                    print(f"\r   {ciphersuite} {master_secret}")
+
         finally:
             writer.close()
 
     async def handle_client(local_reader, local_writer):
+        """
+        Proxy a new client connection
+        """
+
+        # Retrieve source IP and port used to connect to the proxy
         ip_src, port_src = local_reader._transport.get_extra_info('peername')
-        print("---", ip_src, port_src)
 
-        bpf_map_destination_cache = BPF_HANDLER["destination_cache"]
+        # Retrieve process information, and destination IP and port
+        tmp = retrieve_client_information(BPF_HANDLER, port_src)
+        process_name, process_pid, ip_dst, port_dst = tmp
 
-        real_address = None
-        real_port = None
-        destination_key_to_delete = None
-
-        for destination_key, destination_value in bpf_map_destination_cache.items_lookup_batch():  # noqa: E501
-            real_address = socket.inet_ntop(socket.AF_INET, struct.pack("I", destination_value.value >> 32))  # noqa: E501
-            real_port = socket.ntohs(destination_value.value & 0xFFFFFFFF)
-            print(socket.ntohs(destination_key.value), real_address, real_port)
-            if socket.ntohs(destination_key.value) == port_src:
-                ct_array = ct.c_uint16 * 1
-                destination_key_to_delete = ct_array(destination_key)
-                break
-
-        if destination_key_to_delete:
-            bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)  # noqa: E501
-        else:
+        if process_name is None:
             print("!!! Did not find the real destination")
             local_writer.close()
             return
 
+        print(f"\r{process_name}/{process_pid}\n   {ip_src}/{port_src} -> {ip_dst}/{port_dst}")  # noqa: E501
+
         try:
-            remote_reader, remote_writer = await asyncio.open_connection(real_address, real_port)  # noqa: E501
-            pipe1 = pipe(local_reader, remote_writer, "->")
-            pipe2 = pipe(remote_reader, local_writer, "<-")
+            remote_reader, remote_writer = await asyncio.open_connection(ip_dst, port_dst)  # noqa: E501
+            pipe1 = pipe(local_reader, remote_writer, process_pid, "->")
+            pipe2 = pipe(remote_reader, local_writer, process_pid, "<-")
             await asyncio.gather(pipe1, pipe2)
         finally:
             local_writer.close()
@@ -543,7 +533,7 @@ def proxy_command(args):
         await server.serve_forever()
 
     async def all_tasks():
-        tasks = [tcp_proxy(), poll_perf()]
+        tasks = [tcp_proxy()]
         if args.debug:
             tasks += [dots()]
         await asyncio.gather(*tasks)
