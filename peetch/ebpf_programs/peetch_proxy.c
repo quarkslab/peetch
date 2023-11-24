@@ -11,11 +11,9 @@ struct data_t {
   u32 port;
 };
 
-BPF_PERF_OUTPUT(connect_events);
-
 BPF_HASH(pid_cache, u64);
 
-BPF_HASH(destination_cache, u16, u64);
+BPF_HASH(destination_cache, u16, struct data_t);
 
 int connect_v4_prog(struct bpf_sock_addr *ctx) {
   struct data_t data;
@@ -56,12 +54,8 @@ int connect_v4_prog(struct bpf_sock_addr *ctx) {
   data.ip = ctx->user_ip4;
   data.port = ctx->user_port;
 
-  // Send the connect event to userland
-  connect_events.perf_submit(ctx, &data, sizeof(data));
-
-  // Store the real destination into the cache
-  u64 tmp = ((u64)ctx->user_ip4 << 32) + ctx->user_port;
-  destination_cache.update(&new_port, &tmp);
+  // Store the connection data into the cache
+  destination_cache.update(&new_port, &data);
 
   // Divert the connection to peetch proxy
   ctx->user_ip4 = 0x0100007f;
