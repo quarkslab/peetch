@@ -217,7 +217,8 @@ def handle_tls_event(cpu, data, size):
 
 
 def _tls_ebpf_programs(directions_bool, args_ssl_session_offset,
-                       args_ssl_cipher_offset, args_master_secret_offset):
+                       args_ssl_cipher_offset, args_master_secret_offset,
+                       args_client_hello_offset, args_client_random_offset):
     # Get SSL structures offsets
     offsets = [str(offset) for offset in peetch.utils.get_offsets()]
     ssl_session_offset, ssl_cipher_offset, master_secret_offset, \
@@ -236,10 +237,10 @@ def _tls_ebpf_programs(directions_bool, args_ssl_session_offset,
     if args_master_secret_offset is not None:
         master_secret_offset = str(args_master_secret_offset)
 
-    if args.client_hello_offset is not None:
+    if args_client_hello_offset is not None:
         client_hello_offset = str(args.client_hello_offset)
 
-    if args.client_random_offset is not None:
+    if args_client_random_offset is not None:
         client_random_offset = str(args.client_random_offset)
 
     # Compile eBPF programs
@@ -273,7 +274,9 @@ def tls_command(args):
     ebpf_programs = _tls_ebpf_programs(directions_bool,
                                        args.ssl_session_offset,
                                        args.ssl_cipher_offset,
-                                       args.master_secret_offset)
+                                       args.master_secret_offset,
+                                       args.client_hello_offset,
+                                       args.client_random_offset)
     if ebpf_programs is None:
         print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
         sys.exit(1)
@@ -402,7 +405,7 @@ def retrieve_client_information(bpf_handler, port_src):
 
 
 def retrieve_tls_information(bpf_handler, process_pid):
-    ciphersuite, master_secret = [None] * 2
+    ciphersuite, client_random, master_secret = [None] * 3
 
     retries = 5
     pid_to_delete = None
@@ -414,6 +417,8 @@ def retrieve_tls_information(bpf_handler, process_pid):
                 ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
                 master_secret = binascii.hexlify(tls_info.master_secret)
                 master_secret = master_secret.decode("ascii", "ignore")
+                client_random = binascii.hexlify(tls_info.client_random)
+                client_random = client_random.decode("ascii", "ignore")
                 if len(ciphersuite):
                     ct_array = ct.c_uint * 1
                     pid_to_delete = ct_array(pid)
@@ -424,7 +429,7 @@ def retrieve_tls_information(bpf_handler, process_pid):
     if pid_to_delete:
         bpf_map_tls_information.items_delete_batch(pid_to_delete)
 
-    return ciphersuite, master_secret
+    return ciphersuite, client_random, master_secret
 
 
 def proxy_command(args):
@@ -446,12 +451,8 @@ def proxy_command(args):
     bpf_handler.attach_func(connect_function, cgroup_fd,
                             BPFAttachType.CGROUP_INET4_CONNECT)
 
-    # Get SSL structures offsets
-    offsets = [str(offset) for offset in peetch.utils.get_offsets()]
-    ssl_session_offset, ssl_cipher_offset, master_secret_offset = offsets
-
     # Attach the SSL_* uprobes
-    ebpf_programs = _tls_ebpf_programs("1", None, None, None)
+    ebpf_programs = _tls_ebpf_programs("1", None, None, None, None, None)
     if ebpf_programs is None:
         print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
         sys.exit(1)
@@ -491,9 +492,9 @@ def proxy_command(args):
                 data = await reader.read(2048)
                 #print("data", direction, data)  # noqa: E265
                 writer.write(data)
-                ciphersuite, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
+                ciphersuite, client_random, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
                 if ciphersuite:
-                    print(f"\r   {ciphersuite} {master_secret}")
+                    print(f"\r   {ciphersuite} {client_random} {master_secret}")
 
         finally:
             writer.close()
@@ -578,6 +579,10 @@ def main():
                             help="offset to the master secret in an ssl_session_t structure")  # noqa: E501
     tls_parser.add_argument("--ssl_cipher_offset",
                             help="offset to the ssl_cipher structure in an ssl_session_t structure")  # noqa: E501
+    tls_parser.add_argument("--client_hello_offset",
+                            help="offset to the CLIENTHELLO_MSG structure in an ssl structure")  # noqa: E501
+    tls_parser.add_argument("--client_random_offset",
+                            help="offset to the client random in an CLIENTHELLO_MSG structure")  # noqa: E501
     tls_parser.set_defaults(func=tls_command)
 
     # Prepare the 'proxy' subcommand
