@@ -405,7 +405,7 @@ def retrieve_client_information(bpf_handler, port_src):
 
 
 def retrieve_tls_information(bpf_handler, process_pid):
-    ciphersuite, client_random, master_secret = [None] * 3
+    tls_version, ciphersuite, client_random, master_secret = [None] * 4
 
     retries = 5
     pid_to_delete = None
@@ -419,6 +419,7 @@ def retrieve_tls_information(bpf_handler, process_pid):
                 master_secret = master_secret.decode("ascii", "ignore")
                 client_random = binascii.hexlify(tls_info.client_random)
                 client_random = client_random.decode("ascii", "ignore")
+                tls_version = (tls_info.tls_version & 0xF) - 1
                 if len(ciphersuite):
                     ct_array = ct.c_uint * 1
                     pid_to_delete = ct_array(pid)
@@ -429,7 +430,7 @@ def retrieve_tls_information(bpf_handler, process_pid):
     if pid_to_delete:
         bpf_map_tls_information.items_delete_batch(pid_to_delete)
 
-    return ciphersuite, client_random, master_secret
+    return tls_version, ciphersuite, client_random, master_secret
 
 
 def proxy_command(args):
@@ -469,7 +470,7 @@ def proxy_command(args):
         print("proxy - cannot attach to eBPF SSL_* uprobes!")
         sys.exit()
 
-    print("[!] Intercepting calls to connect()")
+    print("[!] Proxying OpenSSL traffic")
 
     # Setup the exit handler
     atexit.register(exit_handler_proxy, bpf_handler,
@@ -492,9 +493,11 @@ def proxy_command(args):
                 data = await reader.read(2048)
                 #print("data", direction, data)  # noqa: E265
                 writer.write(data)
-                ciphersuite, client_random, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
+                tls_version, ciphersuite, client_random, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
                 if ciphersuite:
-                    print(f"\r   {ciphersuite} {client_random} {master_secret}")
+                    print(f"\r   TLS1.{tls_version} {ciphersuite}", end="")
+                    if tls_version < 3:
+                        print(f" {client_random} {master_secret}\n")
 
         finally:
             writer.close()
@@ -505,7 +508,7 @@ def proxy_command(args):
         """
 
         # Retrieve source IP and port used to connect to the proxy
-        ip_src, port_src = local_reader._transport.get_extra_info('peername')
+        ip_src, port_src = local_reader._transport.get_extra_info("peername")
 
         # Retrieve process information, and destination IP and port
         tmp = retrieve_client_information(BPF_HANDLER, port_src)
@@ -516,13 +519,15 @@ def proxy_command(args):
             local_writer.close()
             return
 
-        print(f"\r{process_name}/{process_pid}\n   {ip_src}/{port_src} -> {ip_dst}/{port_dst}")  # noqa: E501
+        print(f"\rIntercepting traffic from {process_name}/{process_pid}\n   to {ip_dst}/{port_dst} via {ip_src}/{port_src}")  # noqa: E501
 
         try:
             remote_reader, remote_writer = await asyncio.open_connection(ip_dst, port_dst)  # noqa: E501
             pipe1 = pipe(local_reader, remote_writer, process_pid, "->")
             pipe2 = pipe(remote_reader, local_writer, process_pid, "<-")
             await asyncio.gather(pipe1, pipe2)
+        except ConnectionResetError as e:
+            print(f"   {e}")
         finally:
             local_writer.close()
 
@@ -562,7 +567,7 @@ def main():
                              help="interface name", default="eth0")
     dump_parser.set_defaults(func=dump_command)
 
-    # Prepare the 'identify' subcommand
+    # Prepare the 'tls' subcommand
     tls_parser = subparser.add_parser("tls",
                                       help="Identify processes that uses TLS")
     tls_parser.add_argument("--directions", action="store_true",

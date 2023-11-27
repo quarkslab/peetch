@@ -37,6 +37,7 @@ BPF_HASH(pid_cache, u32);
 
 // TLS information
 struct TLS_information_t {
+    u16 tls_version;
     #define CIPHERSUITE_MAX_LEN 32
     char ciphersuite[CIPHERSUITE_MAX_LEN];
     #define MASTER_SECRET_MAX_LEN 48
@@ -92,13 +93,14 @@ static u16 get_tls_version(void *ssl_st_ptr) {
 }
 
 
-static void parse_session(struct pt_regs *ctx) {
+static void parse_session(struct pt_regs *ctx, u16 tls_version) {
     // Parse a struct sl_session_st pointer and send
     // data to userspace
 
     // TLS information sent to userspace
     struct TLS_information_t tls_information;
     __builtin_memset(&tls_information, 0, sizeof(tls_information)); // it makes the eBPF verifier happy!
+    tls_information.tls_version = tls_version;
 
     // Get a ssl_st pointer
     void *ssl_st_ptr = (void *) PT_REGS_PARM1(ctx);
@@ -260,7 +262,7 @@ int SSL_write(struct pt_regs *ctx) {
     void *ssl_st_ptr = (void *) PT_REGS_PARM1(ctx);
     u16 tls_version = get_tls_version(ssl_st_ptr);
 
-    parse_session(ctx);
+    parse_session(ctx, tls_version);
 
     return SSL_read_write(ctx, tls_version, &buffer);
 }
