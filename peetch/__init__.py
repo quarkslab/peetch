@@ -544,8 +544,10 @@ def proxy_command(args):
             tasks += [dots()]
         await asyncio.gather(*tasks)
 
-    asyncio.run(all_tasks())
-
+    try:
+        asyncio.run(all_tasks())
+    except KeyboardInterrupt:
+        pass
 
 def main():
     global args
