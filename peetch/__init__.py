@@ -427,7 +427,7 @@ def proxy_command(args):
 
     # Start the proxy
     try:
-        asyncio.run(all_tasks(args))
+        asyncio.run(all_tasks(args.debug))
     except KeyboardInterrupt:
         pass
 
