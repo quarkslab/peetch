@@ -15,7 +15,10 @@ import time
 
 from bcc import BPF, BPFProgType, BPFAttachType
 import pyroute2
-from scapy.all import Ether, wrpcapng, hexdump
+from scapy.all import Ether, IP, TCP, wrpcapng, hexdump, load_layer, conf
+
+load_layer("tls")
+conf.tls_session_enable = True
 
 
 global BPF_HANDLER, BPF_TLS_HANDLER
@@ -29,6 +32,7 @@ BPF_TLS_PROGRAM_SOURCE = open(BPF_TLS_PROGRAM_FILENAME).read()
 BPF_PROXY_PROGRAM_FILENAME = "%s/peetch_proxy.c" % EBPF_PROGRAMS_DIRNAME
 BPF_PROXY_PROGRAM_SOURCE = open(BPF_PROXY_PROGRAM_FILENAME).read()
 PACKETS_CAPTURED = []
+TLS_INFORMATION = {}
 
 
 def load_classifier(interface, ebpf_function):
@@ -295,7 +299,6 @@ def tls_command(args):
         print("tls - cannot attach to eBPF probes!")
         sys.exit()
 
-
     def handle_tls_event(cpu, data, size):
         class TLSEvent(ct.Structure):
             _fields_ = [("address", ct.c_uint32),
@@ -484,21 +487,30 @@ def proxy_command(args):
             await asyncio.sleep(0.5)
             print(".", end="", flush=True)
 
-    async def pipe(reader, writer, pid, direction):
+    async def pipe(reader, writer, pid, direction, ip_src, ip_dst, port_src, port_dst):  # noqa: E501
         """"
         From https://stackoverflow.com/a/46422554
         """
+        global PACKETS_CAPTURED, TLS_INFORMATION
         try:
             while not reader.at_eof():
-                data = await reader.read(2048)
-                #print("data", direction, data)  # noqa: E265
+                data = await reader.read(8192)
+                if not len(data):
+                    continue
+                tls_record = IP(dst=ip_dst, src=ip_src)
+                tls_record /= TCP(dport=port_dst, sport=port_src) / TLS(data)  # noqa: F821
+                summary = tls_record.sprintf("%IP.src%:%TCP.sport% > %IP.dst%:%TCP.dport% %IP.proto%")  # noqa: E501
+                print(f"    {direction} {summary}")
+                PACKETS_CAPTURED += [tls_record]
                 writer.write(data)
+
                 tls_version, ciphersuite, client_random, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
                 if ciphersuite:
-                    print(f"\r   TLS1.{tls_version} {ciphersuite}", end="")
                     if tls_version < 3:
-                        print(f" {client_random} {master_secret}\n")
-
+                        client_random_bytes = binascii.unhexlify(client_random)
+                        master_secret_bytes = binascii.unhexlify(master_secret)
+                        conf.tls_nss_keys = {"CLIENT_RANDOM": {client_random_bytes: master_secret_bytes}}
+                        TLS_INFORMATION = {"version": tls_version, "ciphersuite": ciphersuite}
         finally:
             writer.close()
 
@@ -519,13 +531,25 @@ def proxy_command(args):
             local_writer.close()
             return
 
-        print(f"\rIntercepting traffic from {process_name}/{process_pid}\n   to {ip_dst}/{port_dst} via {ip_src}/{port_src}")  # noqa: E501
+        print(f"\r[+] Intercepting traffic from {process_name}/{process_pid} to {ip_dst}/{port_dst} via {ip_src}/{port_src}")  # noqa: E501
 
         try:
             remote_reader, remote_writer = await asyncio.open_connection(ip_dst, port_dst)  # noqa: E501
-            pipe1 = pipe(local_reader, remote_writer, process_pid, "->")
-            pipe2 = pipe(remote_reader, local_writer, process_pid, "<-")
+            pipe1 = pipe(local_reader, remote_writer, process_pid,
+                         "-->", ip_src, ip_dst, port_src, port_dst)
+            pipe2 = pipe(remote_reader, local_writer, process_pid,
+                         "<--", ip_dst, ip_src, port_dst, port_src)
             await asyncio.gather(pipe1, pipe2)
+
+            global PACKETS_CAPTURED, TLS_INFORMATION
+            tls_version = TLS_INFORMATION.get("version", sys.maxsize)
+            if tls_version < 3:
+
+                from scapy.all import sniff
+                for x in sniff(offline=PACKETS_CAPTURED):
+                    if TLSApplicationData in x:  # noqa: F821
+                        print()
+                        x[TLSApplicationData].show()  # noqa: F821
         except ConnectionResetError as e:
             print(f"   {e}")
         finally:
@@ -548,6 +572,7 @@ def proxy_command(args):
         asyncio.run(all_tasks())
     except KeyboardInterrupt:
         pass
+
 
 def main():
     global args
