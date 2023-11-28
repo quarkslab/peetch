@@ -7,7 +7,6 @@ import atexit
 import ctypes as ct
 import binascii
 import os
-import peetch.utils
 import socket
 import struct
 import sys
@@ -15,11 +14,15 @@ import time
 
 from bcc import BPF, BPFProgType, BPFAttachType
 import pyroute2
-from scapy.all import Ether, IP, TCP, wrpcapng, hexdump, load_layer, conf
+from scapy.all import Ether, wrpcapng, hexdump, load_layer, conf
+
+import peetch.globals
+from peetch.proxy import all_tasks
+import peetch.utils
+
 
 load_layer("tls")
 conf.tls_session_enable = True
-
 
 global BPF_HANDLER, BPF_TLS_HANDLER
 
@@ -380,70 +383,12 @@ def tls_command(args):
             sys.exit()
 
 
-def retrieve_client_information(bpf_handler, port_src):
-
-    process_name, process_pid, ip_dst, port_dst = [None] * 4
-    bpf_map_destination_cache = bpf_handler["destination_cache"]
-
-    destination_key_to_delete = None
-
-    for destination_key, destination_data in bpf_map_destination_cache.items_lookup_batch():  # noqa: E501
-        process_pid = destination_data.pid
-        process_name = destination_data.name.decode("ascii", "replace")
-
-        # Retrieve destination IP and port
-        address_packed = struct.pack("I", destination_data.ip)
-        ip_dst = socket.inet_ntop(socket.AF_INET, address_packed)
-        port_dst = socket.ntohs(destination_data.port)
-
-        if socket.ntohs(destination_key.value) == port_src:
-            ct_array = ct.c_uint16 * 1
-            destination_key_to_delete = ct_array(destination_key)
-            break
-
-    if destination_key_to_delete:
-        bpf_map_destination_cache.items_delete_batch(destination_key_to_delete)
-
-    return process_name, process_pid, ip_dst, port_dst
-
-
-def retrieve_tls_information(bpf_handler, process_pid):
-    tls_version, ciphersuite, client_random, master_secret = [None] * 4
-
-    retries = 5
-    pid_to_delete = None
-    bpf_map_tls_information = bpf_handler["tls_information_cache"]
-    while pid_to_delete is None and retries:
-        retries -= 1
-        for pid, tls_info in bpf_map_tls_information.items_lookup_batch():
-            if pid.value == process_pid:
-                ciphersuite = tls_info.ciphersuite.decode("ascii", "ignore")
-                master_secret = binascii.hexlify(tls_info.master_secret)
-                master_secret = master_secret.decode("ascii", "ignore")
-                client_random = binascii.hexlify(tls_info.client_random)
-                client_random = client_random.decode("ascii", "ignore")
-                tls_version = (tls_info.tls_version & 0xF) - 1
-                if len(ciphersuite):
-                    ct_array = ct.c_uint * 1
-                    pid_to_delete = ct_array(pid)
-                    break
-        time.sleep(0.005)
-
-    # Delete pid from the eBPF map
-    if pid_to_delete:
-        bpf_map_tls_information.items_delete_batch(pid_to_delete)
-
-    return tls_version, ciphersuite, client_random, master_secret
-
-
 def proxy_command(args):
-    global BPF_HANDLER, BPF_TLS_HANDLER
-
     # Compile eBPF programs
     ebpf_programs = BPF_PROXY_PROGRAM_SOURCE.replace("PEETCH_PROXY_PID",
                                                      str(os.getpid()))
     bpf_handler = BPF(text=ebpf_programs)
-    BPF_HANDLER = bpf_handler
+    peetch.globals.BPF_HANDLER = bpf_handler
 
     # Load the eBPF function
     connect_function = bpf_handler.load_func("connect_v4_prog",
@@ -460,8 +405,9 @@ def proxy_command(args):
     if ebpf_programs is None:
         print("ERROR: cannot guess SSL offsets!", file=sys.stderr)
         sys.exit(1)
+
     bpf_tls_handler = BPF(text=ebpf_programs)
-    BPF_TLS_HANDLER = bpf_tls_handler
+    peetch.globals.BPF_TLS_HANDLER = bpf_tls_handler
     try:
         bpf_tls_handler.attach_uprobe(name="ssl",
                                       sym="SSL_write", fn_name="SSL_write")
@@ -473,103 +419,15 @@ def proxy_command(args):
         print("proxy - cannot attach to eBPF SSL_* uprobes!")
         sys.exit()
 
-    print("[!] Proxying OpenSSL traffic")
+    print("[-] Proxying OpenSSL traffic")
 
     # Setup the exit handler
     atexit.register(exit_handler_proxy, bpf_handler,
                     connect_function, cgroup_fd)
 
-    async def dots():
-        """
-        async dummy processing
-        """
-        while True:
-            await asyncio.sleep(0.5)
-            print(".", end="", flush=True)
-
-    async def pipe(reader, writer, pid, direction, ip_src, ip_dst, port_src, port_dst):  # noqa: E501
-        """"
-        From https://stackoverflow.com/a/46422554
-        """
-        global PACKETS_CAPTURED, TLS_INFORMATION
-        try:
-            while not reader.at_eof():
-                data = await reader.read(8192)
-                if not len(data):
-                    continue
-                tls_record = IP(dst=ip_dst, src=ip_src)
-                tls_record /= TCP(dport=port_dst, sport=port_src) / TLS(data)  # noqa: F821
-                summary = tls_record.sprintf("%IP.src%:%TCP.sport% > %IP.dst%:%TCP.dport% %IP.proto%")  # noqa: E501
-                print(f"    {direction} {summary}")
-                PACKETS_CAPTURED += [tls_record]
-                writer.write(data)
-
-                tls_version, ciphersuite, client_random, master_secret = retrieve_tls_information(BPF_TLS_HANDLER, pid)  # noqa: E501
-                if ciphersuite:
-                    if tls_version < 3:
-                        client_random_bytes = binascii.unhexlify(client_random)
-                        master_secret_bytes = binascii.unhexlify(master_secret)
-                        conf.tls_nss_keys = {"CLIENT_RANDOM": {client_random_bytes: master_secret_bytes}}
-                        TLS_INFORMATION = {"version": tls_version, "ciphersuite": ciphersuite}
-        finally:
-            writer.close()
-
-    async def handle_client(local_reader, local_writer):
-        """
-        Proxy a new client connection
-        """
-
-        # Retrieve source IP and port used to connect to the proxy
-        ip_src, port_src = local_reader._transport.get_extra_info("peername")
-
-        # Retrieve process information, and destination IP and port
-        tmp = retrieve_client_information(BPF_HANDLER, port_src)
-        process_name, process_pid, ip_dst, port_dst = tmp
-
-        if process_name is None:
-            print("!!! Did not find the real destination")
-            local_writer.close()
-            return
-
-        print(f"\r[+] Intercepting traffic from {process_name}/{process_pid} to {ip_dst}/{port_dst} via {ip_src}/{port_src}")  # noqa: E501
-
-        try:
-            remote_reader, remote_writer = await asyncio.open_connection(ip_dst, port_dst)  # noqa: E501
-            pipe1 = pipe(local_reader, remote_writer, process_pid,
-                         "-->", ip_src, ip_dst, port_src, port_dst)
-            pipe2 = pipe(remote_reader, local_writer, process_pid,
-                         "<--", ip_dst, ip_src, port_dst, port_src)
-            await asyncio.gather(pipe1, pipe2)
-
-            global PACKETS_CAPTURED, TLS_INFORMATION
-            tls_version = TLS_INFORMATION.get("version", sys.maxsize)
-            if tls_version < 3:
-
-                from scapy.all import sniff
-                for x in sniff(offline=PACKETS_CAPTURED):
-                    if TLSApplicationData in x:  # noqa: F821
-                        print()
-                        x[TLSApplicationData].show()  # noqa: F821
-        except ConnectionResetError as e:
-            print(f"   {e}")
-        finally:
-            local_writer.close()
-
-    async def tcp_proxy():
-        """
-        async TCP proxy
-        """
-        server = await asyncio.start_server(handle_client, "127.0.0.1", 2807)
-        await server.serve_forever()
-
-    async def all_tasks():
-        tasks = [tcp_proxy()]
-        if args.debug:
-            tasks += [dots()]
-        await asyncio.gather(*tasks)
-
+    # Start the proxy
     try:
-        asyncio.run(all_tasks())
+        asyncio.run(all_tasks(args))
     except KeyboardInterrupt:
         pass
 
