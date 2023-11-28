@@ -2,9 +2,9 @@
 
 `peetch` is a collection of tools aimed at experimenting with different aspects of eBPF to bypass TLS protocol protections.
 
-Currently, peetch includes two subcommands. The first called `dump` aims to sniff network traffic by associating information about the source process with each packet. The second called `tls` allows to identify processes using OpenSSL to extract cryptographic keys.
+Currently, peetch includes three subcommands. The first called `dump` aims to sniff network traffic by associating information about the source process with each packet. The second called `tls` allows identifying processes using OpenSSL to extract cryptographic keys. The third one `proxy` automatically intercepts TLS traffic from processes using OpenSSL and decrypts messages on the fly.
 
-Combined, these two commands make it possible to decrypt TLS exchanges recorded in the PCAPng format.
+Combined, the first two commands make it possible to decrypt TLS exchanges recorded in the PCAPng format.
 
 ## Installation
 
@@ -89,23 +89,43 @@ peetch tls --content
 The `--secrets` arguments will display TLS Master Secrets extracted from memory. The following example leverages `--write` to write master secrets to simplify decrypting TLS messages with Scapy:
 
 ```shell
-$ (sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 --http1.1 --tlsv1.2) &
+(sleep 5; curl https://www.perdu.com/?name=highly%20secret%20information --tls-max 1.2 --http1.1 --tlsv1.2) &
 
-# peetch tls --write &
+peetch tls --write &
 curl (1293232) 208.97.177.124/443 TLS1.2 ECDHE-RSA-AES128-GCM-SHA256
 
-# peetch dump --write traffic.pcapng
+peetch dump --write traffic.pcapng
 ^C
 
 # Add the master secret to a PCAPng file
-$ editcap --inject-secrets tls,1293232-master_secret.log traffic.pcapng traffic-ms.pcapng
+editcap --inject-secrets tls,1293232-master_secret.log traffic.pcapng traffic-ms.pcapng
 
-$ scapy
+scapy
 >>> load_layer("tls")
 >>> conf.tls_session_enable = True
 >>> l = rdpcap("traffic-ms.pcapng")
 >>> l[13][TLS].msg
 [<TLSApplicationData  data='GET /?name=highly%20secret%20information HTTP/1.1\r\nHost: www.perdu.com\r\nUser-Agent: curl/7.68.0\r\nAccept: */*\r\n\r\n' |>]
+```
+
+### `proxy`
+
+This sub-command uses eBPF programs to automatically intercept TLS traffic from processes using OpenSSL and decrypt messages on the fly using Scapy.
+
+In the following example, `peeth proxy` display a secret value sent to a server by the `openssl` process.
+
+```shell
+[-] Proxying OpenSSL traffic
+[+] Intercepting traffic from openssl/451255 to 172.67.133.176/443 via 127.0.0.1/58039
+    --> 127.0.0.1:58039 > 172.67.133.176:https tcp
+    <-- 172.67.133.176:https > 127.0.0.1:58039 tcp
+    --> 127.0.0.1:58039 > 172.67.133.176:https tcp
+    <-- 172.67.133.176:https > 127.0.0.1:58039 tcp
+    --> 127.0.0.1:58039 > 172.67.133.176:https tcp
+    --> 127.0.0.1:58039 > 172.67.133.176:https tcp
+
+###[ TLS Application Data ]###
+  data      = b'GET /?secret=9590 HTTP/1.1\r\nHost: www.perdu.com\r\n\r\n\n'
 ```
 
 ## Limitations
