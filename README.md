@@ -57,7 +57,7 @@ b'curl/1289909'
 
 ### `tls`
 
-This sub-command aims at identifying process that uses OpenSSL and makes it is to dump several things like plaintext and secrets.
+This sub-command aims to identify processes that uses OpenSSL and makes it easy to dump several things like plaintext and secrets.
 
 By default, `peetch tls` will only display one line per process, the `--directions` argument makes it possible to display the exchanged messages:
 
@@ -112,9 +112,10 @@ scapy
 
 This sub-command uses eBPF programs to automatically intercept TLS traffic from processes using OpenSSL and decrypt messages on the fly using Scapy.
 
-In the following example, `peeth proxy` display a secret value sent to a server by the `openssl` process.
+In the following example, `peetch proxy` display a secret value sent to a server by the `openssl` process.
 
 ```shell
+peetch proxy
 [-] Proxying OpenSSL traffic
 [+] Intercepting traffic from openssl/451255 to 172.67.133.176/443 via 127.0.0.1/58039
     --> 127.0.0.1:58039 > 172.67.133.176:https tcp
@@ -130,4 +131,4 @@ In the following example, `peeth proxy` display a secret value sent to a server 
 
 ## Limitations
 
-By design, `peetch` only supports OpenSSL and TLS 1.2.
+By design, `peetch` only supports OpenSSL, IPv4 and TLS 1.2.
