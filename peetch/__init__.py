@@ -111,7 +111,7 @@ def handle_skb_event(cpu, data, size):
         if data[i] == 0:
             break
     process_name = data[:i].decode("utf-8", "replace")
-    data = data[i:]
+    data = data[16:]
 
     process_information = "%s/%d" % (process_name, skb_event.pid)
 
