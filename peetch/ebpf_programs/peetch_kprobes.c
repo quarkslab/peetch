@@ -15,15 +15,14 @@
 struct key_t {
   u32 dst;
   u32 src;
-  u64 padding;
 };
 
 struct data_t {
   u32 pid;
-  char name[64];
+  char name[TASK_COMM_LEN];
 };
 
-BPF_HASH(pid_cache, struct key_t *);
+BPF_HASH(pid_cache, struct key_t, struct data_t);
 
 BPF_PERF_OUTPUT(skb_events);
 
@@ -50,11 +49,11 @@ int process_frame(struct __sk_buff *skb) {
 
   // Retrieve the PID and the process name from the IP addresses
   struct key_t key = { .dst = iph->daddr, .src = iph->saddr };
-  struct data_t *value = (struct data_t *) pid_cache.lookup((struct key_t **)&key);
+  struct data_t *value = (struct data_t *) pid_cache.lookup(&key);
   if (value == NULL) {
     key.dst = iph->saddr;
     key.src = iph->daddr;
-    value = (struct data_t *) pid_cache.lookup((struct key_t **)&key);
+    value = (struct data_t *) pid_cache.lookup(&key);
     if (value == NULL)
       return TC_ACT_OK;
   }
@@ -63,7 +62,13 @@ int process_frame(struct __sk_buff *skb) {
   if (value->pid == 0)
     return TC_ACT_OK;
 
-  skb_events.perf_submit_skb(skb, skb->len, value, sizeof(value));
+  struct data_t tmp;
+  __builtin_memset(&tmp, 0, sizeof(tmp));     // it makes the eBPF verifier happy!
+  tmp.pid = value->pid;
+  for (u8 i=0; i < TASK_COMM_LEN; i++)
+    tmp.name[i] = value->name[i];
+
+  skb_events.perf_submit_skb(skb, skb->len, &tmp, sizeof(tmp));
 
   return TC_ACT_OK;
 }
@@ -83,6 +88,10 @@ int kprobe_security_sk_classify_flow(struct pt_regs *ctx, struct sock *sk, struc
   struct key_t key;
   struct data_t data;
 
+  // it makes the eBPF verifier happy!
+  __builtin_memset(&key, 0, sizeof(key));
+  __builtin_memset(&data, 0, sizeof(data));
+
   bpf_probe_read(&key.src,
                  sizeof(sk->__sk_common.skc_daddr),
                  &sk->__sk_common.skc_daddr);
@@ -95,10 +104,10 @@ int kprobe_security_sk_classify_flow(struct pt_regs *ctx, struct sock *sk, struc
   data.pid = id >> 32;
 
   // Get and store the process name
-  bpf_get_current_comm(data.name, 64);
+  bpf_get_current_comm(data.name, sizeof(data.name));
 
   // Store data
-  pid_cache.update((struct key_t **) &key, (unsigned long long *) &data);
+  pid_cache.update(&key, &data);
 
   return 0;
 }
