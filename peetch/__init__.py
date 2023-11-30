@@ -449,7 +449,7 @@ def main():
     dump_parser.add_argument("--write", type=str,
                              help="pcapng filename")
     dump_parser.add_argument("--interface", type=str,
-                             help="interface name", default="eth0")
+                             help="interface name", default=str(conf.iface))
     dump_parser.set_defaults(func=dump_command)
 
     # Prepare the 'tls' subcommand
