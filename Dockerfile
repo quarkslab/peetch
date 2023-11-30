@@ -11,7 +11,7 @@ RUN set -x && \
     PACKAGES="bison build-essential cmake flex git \
     libedit-dev libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev \
     libelf-dev libfl-dev python3-distutils python3-pip linux-headers-$(uname -r) \
-    libssl-dev iproute2 tmux curl bc libelf-dev zip" && \
+    libssl-dev iproute2 tmux curl bc libelf-dev zip tmux tshark curl" && \
     apt-get update && apt-get install -y $PACKAGES && \
     apt-get autoclean && apt-get --purge -y autoremove && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
@@ -22,4 +22,5 @@ RUN git clone https://github.com/iovisor/bcc && cd bcc/ && mkdir build && \
 
 # Install peetch
 COPY . /peetch
-RUN cd /peetch && pip install -r requirements.txt && pip install . && rm -rf /peetch
+RUN cd /peetch && pip install --upgrade pip && pip install -r requirements.txt && \
+    pip install . && rm -rf /peetch
