@@ -19,7 +19,7 @@ docker build -t quarkslab/peetch .
 The following examples assume that you used the following command to enter the Docker image and launch examples within it:
 
 ```shell
-docker run --privileged --network host --mount type=bind,source=/sys,target=/sys --mount type=bind,source=/proc,target=/proc --rm -it quarkslab/peetch
+docker run --privileged --network host --mount type=bind,source=/sys,target=/sys --mount type=bind,source=/proc,target=/proc --pid host --rm -it quarkslab/peetch
 ```
 
 ### `dump`
