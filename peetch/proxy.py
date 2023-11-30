@@ -115,6 +115,7 @@ async def handle_client(local_reader, local_writer):
         local_writer.close()
         return
 
+    print("", flush=True)
     print(f"\r[+] Intercepting traffic from {process_name}/{process_pid}", end="")  # noqa: E501
     print(f" to {ip_dst}/{port_dst} via {ip_src}/{port_src}")
 
@@ -132,6 +133,10 @@ async def handle_client(local_reader, local_writer):
         decrypt_messages(peetch.globals.TLS_INFORMATION,
                          peetch.globals.PACKETS_CAPTURED)
 
+        # Reset global variables
+        conf.tls_nss_keys = {}
+        peetch.globals.TLS_INFORMATION = {}
+        peetch.globals.PACKETS_CAPTURED = []
     except ConnectionResetError as e:
         print(f"   {e}")
     finally:
